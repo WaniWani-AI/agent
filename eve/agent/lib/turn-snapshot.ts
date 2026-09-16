@@ -1,4 +1,6 @@
-import type { Published } from "./published.js";
+import type { SessionAuth } from "eve/context";
+import { type Published, publishedNow } from "./published.js";
+import { assertCallerOwnsSession, tenantOf } from "./tenant.js";
 
 const snapshots = new Map<string, Published>();
 
@@ -10,12 +12,21 @@ export function releaseSnapshot(sessionId: string): void {
 	snapshots.delete(sessionId);
 }
 
-export function requireSnapshot(sessionId: string): Published {
-	const snapshot = snapshots.get(sessionId);
-	if (!snapshot) {
-		throw new Error(
-			"This turn has no published configuration snapshot; the turn.started gate did not run",
-		);
+/**
+ * eve does not re-emit `turn.started` for a turn it resumes after a restart, so
+ * the gate never runs again and this map is empty. Rebuilding beats failing a
+ * conversation that eve is willing to carry on.
+ */
+export async function snapshotFor(input: {
+	sessionId: string;
+	auth: SessionAuth;
+}): Promise<Published> {
+	const held = snapshots.get(input.sessionId);
+	if (held) {
+		return held;
 	}
-	return snapshot;
+	assertCallerOwnsSession(input.auth);
+	const rebuilt = await publishedNow(tenantOf(input.auth));
+	holdSnapshot(input.sessionId, rebuilt);
+	return rebuilt;
 }

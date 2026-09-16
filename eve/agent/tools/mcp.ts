@@ -2,7 +2,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 import type { JsonObject } from "../lib/json.js";
 import { callMcpTool, type McpMeta, textOf } from "../lib/mcp-catalog.js";
 import { ANONYMOUS, channelIdOf, tenantOf } from "../lib/tenant.js";
-import { requireSnapshot } from "../lib/turn-snapshot.js";
+import { snapshotFor } from "../lib/turn-snapshot.js";
 import type { SessionChannel } from "../lib/session-config.js";
 import type { DynamicResolveContext } from "eve/tools";
 
@@ -74,8 +74,11 @@ function buildMeta(input: {
 
 export default defineDynamic({
 	events: {
-		"turn.started": (event, ctx) => {
-			const { config, tools } = requireSnapshot(ctx.session.id);
+		"turn.started": async (event, ctx) => {
+			const { config, tools } = await snapshotFor({
+				sessionId: ctx.session.id,
+				auth: ctx.session.auth,
+			});
 			const tenantKey = tenantOf(ctx.session.auth).key;
 			const meta = buildMeta({
 				ctx,

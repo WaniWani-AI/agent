@@ -1,7 +1,7 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { defineAgent, defineDynamic } from "eve";
 import { resolveModelAccess } from "./lib/model.js";
-import { requireSnapshot } from "./lib/turn-snapshot.js";
+import { snapshotFor } from "./lib/turn-snapshot.js";
 
 const contextWindowTokens = Number(
 	process.env.WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS || 32_000,
@@ -13,8 +13,11 @@ export default defineAgent({
 	// session and turn selections have to be serializable model ids.
 	model: defineDynamic({
 		events: {
-			"step.started": (_event, ctx) => {
-				const { config } = requireSnapshot(ctx.session.id);
+			"step.started": async (_event, ctx) => {
+				const { config } = await snapshotFor({
+					sessionId: ctx.session.id,
+					auth: ctx.session.auth,
+				});
 				const access = resolveModelAccess(config.model);
 				return {
 					model: createOpenAI({
