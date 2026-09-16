@@ -79,6 +79,9 @@ export default defineDynamic({
 				sessionId: ctx.session.id,
 				auth: ctx.session.auth,
 			});
+			// Narrow what the durable tool callback closes over: `config` also
+			// carries the model, and a BYO model may carry a key.
+			const { mcpUrl } = config;
 			const tenantKey = tenantOf(ctx.session.auth).key;
 			const meta = buildMeta({
 				ctx,
@@ -95,7 +98,7 @@ export default defineDynamic({
 						execute: (input: Record<string, unknown>, toolCtx) =>
 							callMcpTool({
 								tenantKey,
-								mcpUrl: config.mcpUrl,
+								mcpUrl,
 								name: tool.name,
 								arguments: input,
 								meta,
