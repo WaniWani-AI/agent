@@ -176,7 +176,11 @@ environment.
 
 The runtime talks to whatever `WANIWANI_API_URL` points at, so a local app works.
 
-1. Run the app on port 3000, and copy an environment key from its developers page.
+1. Run the app on port 3000, and run your MCP server wherever the environment says it lives.
+
+   Use the environment key your MCP server already holds rather than minting a new one. An
+   environment has a single key, so rotating it to give the agent one takes the MCP server's own
+   callbacks down with it, and its flow state stops persisting.
 
 2. Point the runtime at it. `compose.yaml` brings its own Postgres, so nothing else is needed.
 
