@@ -4,7 +4,7 @@ name: waniwani-agent-ci
 # deployment; `--env-file ci/hosted.env` runs the WaniWani-hosted runtime.
 services:
   postgres:
-    image: postgres:latest
+    image: postgres:18-bookworm
     environment:
       POSTGRES_USER: eve
       POSTGRES_PASSWORD: ci
