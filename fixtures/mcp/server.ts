@@ -7,6 +7,7 @@ import {
 	ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import express from "express";
+import { agentRouter } from "../../packages/adapter/src/express.js";
 
 const PORT = Number(process.env.PORT || 3002);
 const WIDGET_URI = "ui://views/ext-apps/echo.html";
@@ -70,6 +71,25 @@ function createServer(): Server {
 }
 
 const app = express();
+
+// The mount a deployment gets: one env var, one router, beside `/mcp`.
+const eveUrl = process.env.WANIWANI_AGENT_EVE_URL;
+if (eveUrl) {
+	app.use(
+		"/agent/v1",
+		agentRouter({
+			eveUrl,
+			apiKey: process.env.WANIWANI_API_KEY ?? "",
+			publicKey: process.env.WANIWANI_PUBLIC_KEY ?? "",
+			allowedOrigins: (process.env.WANIWANI_ALLOWED_ORIGINS ?? "")
+				.split(",")
+				.filter(Boolean),
+			title: "Fixture MCP",
+			mcpLoopbackUrl: `http://127.0.0.1:${PORT}/mcp`,
+		}),
+	);
+}
+
 app.use(express.json());
 
 app.get("/_calls", (_request, response) => response.json({ calls }));

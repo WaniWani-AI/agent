@@ -1,0 +1,14 @@
+
+{"data":{"runtime":{"agentId":"waniwani-agent-runtime","agentName":"waniwani-agent-runtime","eveVersion":"0.52.2"}},"type":"session.started","meta":{"at":"2026-09-16T13:36:53.225Z","id":"evt_01M2N6YGF9CKDCJMHPW6DQ17R9"}}
+{"data":{"sequence":0,"turnId":"turn_0"},"type":"turn.started","meta":{"at":"2026-09-16T13:36:53.225Z","id":"evt_01M2N6YGF9CKDCJMHPW6DQ17RA"}}
+{"data":{"message":"hello","parts":[{"text":"hello","type":"text"}],"sequence":0,"turnId":"turn_0"},"type":"message.received","meta":{"at":"2026-09-16T13:36:53.226Z","id":"evt_01M2N6YGFADS1K20QJ9JDM494P"}}
+{"data":{"modelId":"openai/fixture/model","sequence":0,"stepIndex":0,"turnId":"turn_0"},"type":"step.started","meta":{"at":"2026-09-16T13:36:53.226Z","id":"evt_01M2N6YGFADS1K20QJ9JDM494Q"}}
+{"data":{"callId":"call_1","inputTextDelta":"{\"text\":\"hello\"}","sequence":0,"stepIndex":0,"toolName":"echo","turnId":"turn_0"},"type":"action.input.appended","meta":{"at":"2026-09-16T13:36:53.248Z","id":"evt_01M2N6YGG01AP4XQKX9RCFZFTY"}}
+{"data":{"actions":[{"callId":"call_1","input":{"text":"hello"},"kind":"tool-call","toolName":"echo"}],"sequence":0,"stepIndex":0,"turnId":"turn_0"},"type":"actions.requested","meta":{"at":"2026-09-16T13:36:53.250Z","id":"evt_01M2N6YGG2QXF5V88BMJFWZAT0"}}
+{"data":{"result":{"callId":"call_1","kind":"tool-result","output":{"_meta":{"openai/outputTemplate":"ui://views/ext-apps/echo.html"},"content":[{"type":"text","text":"echo: hello"}]},"toolName":"echo"},"sequence":0,"status":"completed","stepIndex":0,"turnId":"turn_0"},"type":"action.result","meta":{"at":"2026-09-16T13:36:53.261Z","id":"evt_01M2N6YGGDWXRW4WQPJHVS0DRH"}}
+{"data":{"finishReason":"tool-calls","sequence":0,"stepIndex":0,"turnId":"turn_0","usage":{"inputTokens":11,"outputTokens":7,"cacheReadTokens":0}},"type":"step.completed","meta":{"at":"2026-09-16T13:36:53.263Z","id":"evt_01M2N6YGGFW1N9ZGDP2B9DSFZF"}}
+{"data":{"modelId":"openai/fixture/model","sequence":0,"stepIndex":1,"turnId":"turn_0"},"type":"step.started","meta":{"at":"2026-09-16T13:36:53.290Z","id":"evt_01M2N6YGHAZDQNB8EDKY9DJE7Q"}}
+{"data":{"messageDelta":"the fixture answered","sequence":0,"stepIndex":1,"turnId":"turn_0"},"type":"message.appended","meta":{"at":"2026-09-16T13:36:53.298Z","id":"evt_01M2N6YGHJ94Q4KRV0FNYZN31G"}}
+{"data":{"finishReason":"stop","message":"the fixture answered","sequence":0,"stepIndex":1,"turnId":"turn_0"},"type":"message.completed","meta":{"at":"2026-09-16T13:36:53.300Z","id":"evt_01M2N6YGHMRQHH0WZ2T9CKZHBN"}}
+{"data":{"finishReason":"stop","sequence":0,"stepIndex":1,"turnId":"turn_0","usage":{"inputTokens":11,"outputTokens":7,"cacheReadTokens":0}},"type":"step.completed","meta":{"at":"2026-09-16T13:36:53.300Z","id":"evt_01M2N6YGHMRQHH0WZ2T9CKZHBP"}}
+{"data":{"sequence":0,"turnId":"turn_0"},"type":"turn.completed","meta":{"at":"2026-09-16T13:36:53.305Z","id":"evt_01M2N6YGHS5KN8BPDEW9GKXRPP"}}

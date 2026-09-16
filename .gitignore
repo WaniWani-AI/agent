@@ -6,3 +6,4 @@ node_modules
 !.env.example
 .secrets/
 .DS_Store
+dist

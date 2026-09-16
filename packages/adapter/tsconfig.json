@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023", "dom"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["bun-types"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "tsup.config.ts"]
+}

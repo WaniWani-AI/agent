@@ -1,0 +1,43 @@
+{
+  "name": "@waniwani/agent-adapter",
+  "version": "0.1.0",
+  "description": "Turns a WaniWani agent runtime session into a UI message stream, and serves the /agent/v1 routes an MCP server mounts.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "import": "./dist/express.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "test": "bun test test",
+    "typecheck": "tsc --noEmit",
+    "test:disconnect": "node --test node-checks/disconnect.mjs"
+  },
+  "dependencies": {
+    "jose": "6.1.0"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": ">=1.30.0",
+    "cors": "^2.8.5",
+    "express": "^5"
+  },
+  "devDependencies": {
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.1",
+    "bun-types": "1.3.13",
+    "tsup": "8.5.0",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
