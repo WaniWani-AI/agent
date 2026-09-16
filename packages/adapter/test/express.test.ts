@@ -151,20 +151,20 @@ test("a widget posts from the origin this router serves it on", async () => {
 });
 
 test("a turn whose stream dies is cancelled on the runtime", async () => {
-	const cancelled: string[] = [];
+	const cancelled: unknown[] = [];
 	const runtime = Bun.serve({
 		port: 0,
-		fetch(request) {
+		async fetch(request) {
 			const { pathname } = new URL(request.url);
 			if (pathname === "/eve/v1/session") {
 				return Response.json({ ok: true, sessionId: "wrun_dies" });
 			}
 			if (pathname.endsWith("/cancel")) {
-				cancelled.push(pathname);
+				cancelled.push({ pathname, body: await request.json() });
 				return Response.json({ ok: true, status: "no_active_turn" });
 			}
 			// Half an answer, then a body that ends with the turn still running.
-			return new Response('{"type":"message.appended","data":{"messageDelta":"half"}}\n', {
+			return new Response('{"type":"message.appended","data":{"messageDelta":"half","turnId":"turn_dies"}}\n', {
 				headers: { "content-type": "application/x-ndjson" },
 			});
 		},
@@ -190,7 +190,7 @@ test("a turn whose stream dies is cancelled on the runtime", async () => {
 		for (let attempt = 0; attempt < 40 && cancelled.length === 0; attempt += 1) {
 			await Bun.sleep(25);
 		}
-		expect(cancelled).toEqual(["/eve/v1/session/wrun_dies/cancel"]);
+		expect(cancelled).toEqual([{ pathname: "/eve/v1/session/wrun_dies/cancel", body: { turnId: "turn_dies" } }]);
 	} finally {
 		runtime.stop(true);
 	}

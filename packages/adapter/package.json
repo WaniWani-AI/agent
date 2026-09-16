@@ -19,7 +19,8 @@
   "scripts": {
     "build": "tsup",
     "test": "bun test test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:disconnect": "node --test node-checks/disconnect.mjs"
   },
   "dependencies": {
     "jose": "6.1.0"

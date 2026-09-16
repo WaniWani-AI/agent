@@ -41,10 +41,16 @@ runtimeHealth({ eveUrl, credential }): Promise<unknown>
 encodeSse(chunks): ReadableStream<Uint8Array>
 ```
 
-`runTurn` answers `{ sessionId, chunks }` as soon as the runtime has taken the turn, and the
+`runTurn` answers `{ sessionId, chunks, cancel }` as soon as the runtime has taken the turn, and the
 chunks arrive as the model writes them. `credential` is the environment key on a self-hosted
 deployment. On the hosted one it is a function, because a hosted token names the session it may
-address and the adapter only learns that id after the session exists.
+address and the adapter only learns that id after the session exists. Call the returned
+`cancel()` for disconnect cleanup: it targets only that response's turn. The standalone
+`cancelTurn({ sessionId, ... })` intentionally stops the session's current turn (the Stop button).
+Follow-ups use `turnPolicy: "steer"` and filter stream events by the accepted delivery ID, so
+an earlier answer finishing during submission cannot close the new response. Cancellation uses
+a ten-second deadline; response cleanup shares that budget across ownership discovery,
+retries, and the cancellation request, preserving the original connection error if cleanup fails.
 
 **`@waniwani/agent-adapter/express`** is the router an MCP server mounts beside its own `/mcp`.
 
@@ -81,13 +87,10 @@ never leave step two running a newer model than the prompt it is executing.
 Revalidation runs beside the turn, never in front of it: a conditional `GET` at most once a
 minute per tenant, and a failure keeps the copy already in memory.
 
-**One caveat worth knowing.** The plan this repository implements assumes a throwing
-`turn.started` hook produces a recoverable `turn.failed`. In eve 0.52.2 it does not: the throw
-escapes `turnStep`, the workflow retries the step three times, and the session ends in
-`session.failed`. The safety property still holds, since a turn that cannot reach its
-configuration never answers, and the one-minute floor means the three retries cost one request
-rather than four. What is lost is resumability: that conversation is over, and the next message
-starts a new session.
+A configuration failure in the `turn.started` hook produces `turn.failed`. The turn never
+answers without its configuration; warm sessions can keep using the cached copy during an
+outage. The one-minute retry floor prevents repeated failures from flooding the configuration
+service.
 
 **Who may address a session.** eve authenticates session-addressed routes but never authorizes
 them, so the hosted token carries a `sid` claim naming the one session it may touch and the channel
@@ -105,10 +108,11 @@ snapshot would fix it, and the ticket rules out holding configuration in durable
 
 ```sh
 cd eve && npm ci && npx tsc --noEmit && bun test agent && cd ..
-cd packages/adapter && npm ci && npx tsc --noEmit && bun test test && npm run build && cd ../..
+cd packages/adapter && npm ci && npx tsc --noEmit && bun test test && npm run build && npm run test:disconnect && cd ../..
 node ci/keygen.mjs
 
 docker compose -f compose.ci.yaml --env-file ci/selfhosted.env up --build --wait
+bun run test/continuation.ts
 STACK=selfhosted AGENT_ENV_FILE=ci/selfhosted.env bun test test/e2e.test.ts
 docker compose -f compose.ci.yaml --env-file ci/selfhosted.env down -v
 
@@ -130,10 +134,28 @@ environment with that environment's key, which a hosted runtime does not hold.
 
 ## Pins
 
-`eve@0.52.2`, `@workflow/world-postgres@5.0.0-beta.40`, `ai@7.0.82`, `@ai-sdk/openai@4.0.36`,
+`eve@0.53.0`, `@workflow/world-postgres@5.0.0-beta.40`, `ai@7.0.93`, `@ai-sdk/openai@4.0.36`,
 `@modelcontextprotocol/sdk@1.30.0`, `jose@6.1.0`, Node 24. The Postgres World pin is load-bearing:
 the default npm tag is incompatible with the Workflow line eve bundles. Do not move any of them
 without running the end-to-end suite.
 
 The image and the package are versioned together, because the adapter reimplements the runtime's
 wire protocol over `fetch` rather than importing its client.
+
+The runtime build applies checked patches in `eve/scripts/` to these exact versions and runs
+with `WORKFLOW_MAX_INLINE_STEPS=0`. PostgreSQL serializes workflow invocations; running a model
+step inline would hold that invocation open and block the replay delivering cancellation.
+Separate step jobs let a follow-up interrupt generation promptly. The Workflow patch enables zero
+(the bundled parser otherwise rejects it), is idempotent, and fails on an Eve upgrade until
+reviewed. Keep the setting when running the built runtime outside Docker; `npm start` sets it.
+The Postgres patch routes workflow replays and Eve's cancellation-forwarding step to a control
+task with two reserved workers, in addition to the configured ordinary worker pool. Without
+reserved capacity, model calls filling the pool would also block cancellation. Both pools
+share the existing per-run serialization and duplicate-message protection.
+These changes add queue round trips and two worker slots; retain the live interruption and
+saturation tests when upgrading either dependency or changing runtime concurrency.
+
+`bun run test/continuation.ts` exercises the real self-hosted stack against a gated model on
+host port 13005. It forces the tail-read/POST race and checks that steering aborts the old model
+connection and preserves both user messages. It also checks rapid A/B/C follow-ups and late
+cleanup of earlier responses, and interruption with all five model workers occupied. Compose maps `host.docker.internal` for Linux CI.

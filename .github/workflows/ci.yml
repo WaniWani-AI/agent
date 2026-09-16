@@ -56,6 +56,10 @@ jobs:
         run: npm run build
         working-directory: packages/adapter
 
+      - name: Browser disconnect regression (Node)
+        run: npm run test:disconnect
+        working-directory: packages/adapter
+
       - name: Adapter package contents
         run: npm pack --dry-run
         working-directory: packages/adapter
@@ -65,6 +69,9 @@ jobs:
 
       - name: Self-hosted stack
         run: docker compose -f compose.ci.yaml --env-file ci/selfhosted.env up --build --wait
+
+      - name: Continuation race and interruption regression
+        run: bun run test/continuation.ts
 
       - name: Self-hosted checks
         run: bun test test/e2e.test.ts

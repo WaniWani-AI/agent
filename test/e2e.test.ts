@@ -552,9 +552,9 @@ onSelfHosted("(d) an outage keeps warm sessions answering and fails a cold one l
 	await restartEve();
 	const cold = await startSession("anyone there?", credential());
 	const failure = cold.events.at(-1);
-	expect(failure?.type).toBe("session.failed");
+	expect(failure?.type).toBe("turn.failed");
 	expect(JSON.stringify(failure?.data)).toContain(
-		"No published configuration for this agent",
+		"Agent configuration failed (500): FIXTURE_DOWN",
 	);
 	expect(JSON.stringify(failure?.data)).toContain("500");
 	expect(

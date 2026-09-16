@@ -1,6 +1,8 @@
 import { SignJWT } from "jose";
 import {
 	type Credential,
+	type EveDelivery,
+	type EveEvent,
 	type EveTarget,
 	type EveTurnBody,
 	cancelEveTurn,
@@ -68,6 +70,8 @@ export type RunTurnInput = {
 export async function runTurn(input: RunTurnInput): Promise<{
 	sessionId: string;
 	chunks: ReadableStream<UIMessageChunk>;
+	/** Stop this response's turn without cancelling a newer message. */
+	cancel: () => Promise<void>;
 }> {
 	const target: EveTarget = {
 		eveUrl: input.eveUrl,
@@ -88,22 +92,56 @@ export async function runTurn(input: RunTurnInput): Promise<{
 	// still have been accepted, leaving no session id to cancel the turn with.
 	const continuing = input.sessionId;
 	const sessionId = continuing ?? (await createEveSession(target, body));
-	const startIndex = continuing
+	const delivery: EveDelivery = continuing
 		? await continueEveSession(target, continuing, body)
-		: 0;
+		: { startIndex: 0 };
+	let turnId: string | undefined;
+	let ownsCancellation = false;
+	const observe = (event: EveEvent): void => {
+		const id = (event.data as { turnId?: unknown } | undefined)?.turnId;
+		if (turnId === undefined && typeof id === "string" && id) {
+			turnId = id;
+			// Rapid follow-ups can share one replacement turn. Only the latest
+			// delivery may cancel it when its response disconnects.
+			ownsCancellation = delivery.deliveryId === undefined ||
+				event.meta?.deliveryIds?.at(-1) === delivery.deliveryId;
+		}
+	};
+	let cancellation: Promise<void> | undefined;
+	const cancel = (): Promise<void> => cancellation ??= (async () => {
+		// One deadline covers discovery, retries, and the cancellation request.
+		const signal = AbortSignal.timeout(10_000);
+		// A disconnect can precede the first event (or even stream attachment).
+		// Resolve ownership from the accepted delivery, never from "current turn".
+		if (!turnId) {
+			const pending = await openEveStream({
+				target, sessionId, ...delivery, signal,
+			});
+			const reader = pending.getReader();
+			try {
+				while (!turnId) {
+					const next = await reader.read();
+					if (next.done) break;
+					observe(next.value);
+				}
+			} finally {
+				await reader.cancel().catch(() => {});
+			}
+		}
+		if (turnId && ownsCancellation) await cancelEveTurn(target, sessionId, turnId, signal);
+	})();
 
-	// The turn is running by now, so a stream we cannot attach to would leave the
-	// runtime answering into nothing.
 	const events = await openEveStream({
 		target,
 		sessionId,
-		startIndex,
+		...delivery,
+		onEvent: observe,
 		...(input.signal ? { signal: input.signal } : {}),
 	}).catch(async (error: unknown) => {
-		await cancelEveTurn(target, sessionId).catch(() => {});
+		await cancel().catch(() => {});
 		throw error;
 	});
-	return { sessionId, chunks: events.pipeThrough(uiMessageChunks()) };
+	return { sessionId, chunks: events.pipeThrough(uiMessageChunks()), cancel };
 }
 
 export async function cancelTurn(input: {

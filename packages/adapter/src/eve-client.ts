@@ -23,7 +23,14 @@ const BASE_DELAY_MS = 250;
 const MAX_DELAY_MS = 4_000;
 
 /** One NDJSON line off the session stream. */
-export type EveEvent = { readonly type: string; readonly data?: unknown };
+export type EveEvent = {
+	readonly type: string;
+	readonly data?: unknown;
+	readonly meta?: { readonly deliveryIds?: readonly string[] };
+};
+
+/** The cursor locates events; the delivery id identifies the submitted message. */
+export type EveDelivery = { startIndex: number; deliveryId?: string };
 
 /**
  * What the runtime is given as `Authorization`. A self-hosted router presents
@@ -85,14 +92,25 @@ async function failure(response: Response): Promise<EveError> {
 	return new EveError(response.status, detail || response.statusText);
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	signal?.throwIfAborted();
+	return new Promise((resolve, reject) => {
+		const abort = (): void => {
+			clearTimeout(timer);
+			reject(signal?.reason);
+		};
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", abort);
+			resolve();
+		}, ms);
+		signal?.addEventListener("abort", abort, { once: true });
+	});
 }
 
 async function postTurn(
 	target: EveTarget,
 	path: string,
-	body: EveTurnBody,
+	body: EveTurnBody & { turnPolicy?: "steer" },
 	sessionId?: string,
 ): Promise<Response> {
 	const response = await fetch(route(target, path), {
@@ -128,23 +146,24 @@ export async function createEveSession(
 	return sessionId;
 }
 
-/**
- * Adds a turn to a session and answers the index its first event lands on. A
- * mid-turn message steers the running turn, so a 409 means a session that takes
- * no turn at all, and that turn appends while we ask, hence the tail re-read.
- */
+/** Submit a follow-up with an explicit interrupt policy and a correlated response. */
 export async function continueEveSession(
 	target: EveTarget,
 	sessionId: string,
 	body: EveTurnBody,
-): Promise<number> {
+): Promise<EveDelivery & { deliveryId: string }> {
 	let delay = BASE_DELAY_MS;
 	for (let attempt = 1; ; attempt += 1) {
 		const tail = await streamTailIndex(target, sessionId);
 		try {
-			const response = await postTurn(target, sessionPath(sessionId), body, sessionId);
-			await response.body?.cancel().catch(() => {});
-			return tail + 1;
+			const response = await postTurn(
+				target, sessionPath(sessionId), { ...body, turnPolicy: "steer" }, sessionId,
+			);
+			const accepted = await response.json() as { deliveryId?: unknown };
+			if (typeof accepted.deliveryId !== "string" || !accepted.deliveryId.trim()) {
+				throw new EveError(0, "Runtime returned no delivery id; update Eve before continuing sessions");
+			}
+			return { startIndex: tail + 1, deliveryId: accepted.deliveryId };
 		} catch (error) {
 			const again =
 				error instanceof EveError && error.status === 409 && attempt < SEND_ATTEMPTS;
@@ -179,6 +198,8 @@ export async function openEveStream(input: {
 	target: EveTarget;
 	sessionId: string;
 	startIndex: number;
+	deliveryId?: string;
+	onEvent?: (event: EveEvent) => void;
 	signal?: AbortSignal;
 }): Promise<ReadableStream<EveEvent>> {
 	const { target, sessionId, startIndex, signal } = input;
@@ -197,10 +218,10 @@ export async function openEveStream(input: {
 			headers: await headersFor(target, sessionId),
 			...(signal ? { signal } : {}),
 		});
-		if (response.ok && response.body) return ndjson(response.body);
+		if (response.ok && response.body) return ndjson(response.body, input.deliveryId, input.onEvent);
 		last = await failure(response);
 		if (!RETRYABLE.has(response.status)) throw last;
-		await sleep(delay);
+		await sleep(delay, signal);
 		delay = Math.min(delay * 2, MAX_DELAY_MS);
 	}
 	throw last ?? new EveError(0, "Could not open the session stream");
@@ -209,66 +230,75 @@ export async function openEveStream(input: {
 export async function cancelEveTurn(
 	target: EveTarget,
 	sessionId: string,
+	turnId?: string,
+	signal: AbortSignal = AbortSignal.timeout(10_000),
 ): Promise<void> {
 	const response = await fetch(route(target, sessionPath(sessionId, "/cancel")), {
 		method: "POST",
 		headers: { ...(await headersFor(target, sessionId)), "content-type": "application/json" },
-		body: "{}",
+		body: JSON.stringify(turnId === undefined ? {} : { turnId }),
+		signal,
 	});
-	await response.body?.cancel().catch(() => {});
 	if (!response.ok) throw await failure(response);
+	await response.body?.cancel().catch(() => {});
 }
 
-/** One event per line, ending at the boundary of the turn being read. */
-function ndjson(body: ReadableStream<Uint8Array>): ReadableStream<EveEvent> {
+/** One event per line, ending only at the submitted message's own boundary. */
+function ndjson(
+	body: ReadableStream<Uint8Array>,
+	deliveryId?: string,
+	onEvent?: (event: EveEvent) => void,
+): ReadableStream<EveEvent> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
-	let ended = false;
+	let eof = false;
+	let started = deliveryId === undefined;
 
 	return new ReadableStream<EveEvent>({
 		async pull(controller) {
-			const emit = async (line: string): Promise<void> => {
-				const event = JSON.parse(line) as EveEvent;
-				controller.enqueue(event);
-				if (!TURN_BOUNDARY.has(event.type)) return;
-				ended = true;
-				await reader.cancel().catch(() => {});
-				controller.close();
-			};
-
-			for (;;) {
-				const newline = buffer.indexOf("\n");
-				if (newline === -1) {
-					const { done, value } = await reader.read();
-					if (!done) {
-						buffer += decoder.decode(value, { stream: true });
+			try {
+				for (;;) {
+					const newline = buffer.indexOf("\n");
+					if (newline === -1 && !eof) {
+						const { done, value } = await reader.read();
+						eof = done;
+						buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
 						continue;
 					}
-					const tail = buffer.trim();
-					buffer = "";
-					if (tail) await emit(tail);
-					else if (ended) controller.close();
-					// A body that stops before the turn does leaves a half-written
-					// answer, which the browser would otherwise render as the whole of
-					// one.
-					else {
-						controller.error(
-							new EveError(0, "The session stream ended before the turn did"),
-						);
+					const line = (newline === -1 ? buffer : buffer.slice(0, newline)).trim();
+					buffer = newline === -1 ? "" : buffer.slice(newline + 1);
+					if (!line) {
+						if (eof && !buffer) throw new EveError(0, "The session stream ended before the turn did");
+						continue;
+					}
+					const event = JSON.parse(line) as EveEvent;
+					if (deliveryId !== undefined) {
+						// Mirror Eve's delivery filter, including session-wide terminal errors.
+						const matches = event.meta?.deliveryIds?.includes(deliveryId) === true;
+						const terminal = event.type === "session.failed" || event.type === "session.completed";
+						if (!matches && terminal && (!started || event.type === "session.completed")) {
+							throw new EveError(0, "The session ended before the accepted message reached its turn boundary");
+						}
+						if (!started && !matches) continue;
+						if (!terminal && event.meta?.deliveryIds !== undefined && !matches) continue;
+						started = true;
+					}
+					onEvent?.(event);
+					controller.enqueue(event);
+					if (TURN_BOUNDARY.has(event.type)) {
+						await reader.cancel().catch(() => {});
+						controller.close();
 					}
 					return;
 				}
-
-				const line = buffer.slice(0, newline).trim();
-				buffer = buffer.slice(newline + 1);
-				if (!line) continue;
-				await emit(line);
-				return;
+			} catch (error) {
+				await reader.cancel(error).catch(() => {});
+				controller.error(error);
 			}
 		},
 		cancel(reason) {
-			void reader.cancel(reason).catch(() => {});
+			return reader.cancel(reason).catch(() => {});
 		},
 	});
 }

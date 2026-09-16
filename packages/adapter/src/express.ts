@@ -282,10 +282,10 @@ export function agentRouter(options: AgentRouterOptions): Router {
 		const abort = new AbortController();
 		let closed = false;
 		let finished = false;
-		let open: string | undefined;
+		let cancel: (() => Promise<void>) | undefined;
 		const stop = (): void => {
-			if (finished || !open) return;
-			void cancelTurn({ eveUrl, credential: apiKey, sessionId: open }).catch(() => {});
+			if (finished) return;
+			void cancel?.().catch(() => {});
 		};
 		res.on("close", () => {
 			closed = true;
@@ -302,7 +302,7 @@ export function agentRouter(options: AgentRouterOptions): Router {
 				...(requested ? { sessionId: requested } : {}),
 				signal: abort.signal,
 			});
-			open = turn.sessionId;
+			cancel = turn.cancel;
 			if (closed) {
 				stop();
 				return;

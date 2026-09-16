@@ -4,17 +4,18 @@
   "type": "module",
   "scripts": {
     "build": "eve build",
-    "start": "eve start --host 0.0.0.0",
+    "start": "WORKFLOW_MAX_INLINE_STEPS=0 eve start --host 0.0.0.0",
     "test": "bun test agent",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prebuild": "node scripts/patch-workflow.mjs && node scripts/patch-postgres.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "4.0.36",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@waniwani/sdk": "^0.19.8",
     "@workflow/world-postgres": "5.0.0-beta.40",
-    "ai": "7.0.82",
-    "eve": "0.52.2"
+    "ai": "7.0.93",
+    "eve": "0.53.0"
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
