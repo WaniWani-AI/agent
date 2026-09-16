@@ -27,7 +27,12 @@ address reachable from inside your network.
    printf %s 'wwk_...' > .secrets/api_key
    openssl rand -hex 32 > .secrets/agent_secret
    chmod 600 .secrets/*
+   sudo chown 1000:1000 .secrets/*   # linux only
    ```
+
+   Compose bind-mounts file-backed secrets with the source file's owner and mode,
+   and the image runs as UID 1000. A `0600` file owned by anyone else is
+   unreadable inside the container and the runtime exits at startup.
 
    `api_key` is your identity to WaniWani. `agent_secret` is the HMAC secret your website's
    backend signs session tokens with, and the runtime verifies every inbound request against it.
@@ -58,6 +63,22 @@ mints per visitor. Nothing else is accepted.
 | `extra` | Optional. A JSON object, as a string, passed through to your MCP server. |
 
 A visitor never sees the secret. Mint the token server-side, per page load.
+
+## Who may address a session
+
+eve authenticates every session-addressed route and authorizes none of them. `routeAuth` runs the
+channel's auth function and then hands the request straight to `attachSession(sessionId)`, so a
+token that verifies is accepted against any session id it names.
+
+The `turn.started` gate closes the half that changes state. A request continuing someone else's
+session must carry the same `environmentId` the session was created with, and, when both sides
+name a real visitor rather than `anonymous`, the same `sub`. A mismatch fails the turn.
+
+The half that only reads is still open. `GET /eve/v1/session/:id/stream` and the cancel, clear,
+compact and reset routes reach eve before any authored code runs, so a valid token plus a session
+id is enough to read a transcript or end a conversation. Session ids are ULIDs and are not
+guessable, but they are not a credential either. Closing this needs either the adapter in front of
+the runtime to own the boundary, or an ownership check inside eve.
 
 ## How configuration reaches a turn
 
@@ -107,7 +128,7 @@ A missing key fails the turn with a message naming the variable. There is no fal
 | `WANIWANI_ANALYTICS` | `ingest` reports transcripts to WaniWani, `off` reports nothing. Defaults to `off`. |
 | `WANIWANI_PUBLIC_KEY` | Public analytics key. Required when analytics are on. |
 | `MODEL_API_KEY` | Key for your own model, when the payload carries none. |
-| `AI_GATEWAY_API_KEY` | Key for managed inference. |
+| `AI_GATEWAY_API_KEY` | Key for managed inference. Required when the published configuration names a managed model. |
 | `AI_GATEWAY_BASE_URL` | Overrides the gateway endpoint. Leave unset in production. |
 | `WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS` | Context window the runtime assumes. Defaults to `32000`. |
 | `POSTGRES_PASSWORD` | Required by `compose.yaml`. Compose refuses to start without it. |

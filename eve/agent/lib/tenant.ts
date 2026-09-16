@@ -2,6 +2,7 @@ import { createPrivateKey, sign } from "node:crypto";
 import type { SessionAuth } from "eve/context";
 
 export const SELF_TENANT = "self";
+export const ANONYMOUS = "anonymous";
 
 const SERVICE_ISSUER = "waniwani:agent-runtime";
 const SERVICE_TOKEN_LIFETIME_SECONDS = 60;
@@ -37,6 +38,35 @@ export function tenantOf(auth: SessionAuth | undefined): Tenant {
 
 export function channelIdOf(auth: SessionAuth | undefined): string | undefined {
 	return attribute(auth, "channelId");
+}
+
+/**
+ * eve authenticates every session-addressed route but authorizes none of them,
+ * so a token valid for one environment can post into another environment's
+ * session, which resolves against the initiator's tenant.
+ */
+export function assertCallerOwnsSession(auth: SessionAuth | undefined): void {
+	const { current, initiator } = auth ?? { current: null, initiator: null };
+	if (!current || !initiator || current === initiator) {
+		return;
+	}
+
+	const currentEnvironment = current.attributes.environmentId;
+	const initiatorEnvironment = initiator.attributes.environmentId;
+	if (currentEnvironment !== initiatorEnvironment) {
+		throw new Error(
+			"Session token names a different environment than the session it addresses",
+		);
+	}
+
+	const identified =
+		current.subject &&
+		current.subject !== ANONYMOUS &&
+		initiator.subject &&
+		initiator.subject !== ANONYMOUS;
+	if (identified && current.subject !== initiator.subject) {
+		throw new Error("Session token names a different visitor than the session it addresses");
+	}
 }
 
 function base64url(value: Buffer | string): string {

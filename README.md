@@ -36,6 +36,12 @@ configuration never answers, and the one-minute floor means the three retries co
 rather than four. What is lost is resumability: that conversation is over, and the next message
 starts a new session.
 
+**And one open hole.** eve authenticates session-addressed routes but never authorizes them. The
+gate rejects a cross-tenant or cross-visitor continuation, so nothing writes into a session it does
+not own. Reading one is still possible for anyone holding a valid token and a session id, because
+`GET /eve/v1/session/:id/stream` and the cancel, clear, compact and reset routes answer before any
+authored code runs. See "Who may address a session" in the operator doc.
+
 ## Running CI locally
 
 ```sh

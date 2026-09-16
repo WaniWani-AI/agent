@@ -42,7 +42,7 @@ mock.module("./mcp-catalog.js", () => ({
 const { publishedNow, revalidatePublished, resetPublished } = await import(
 	"./published.js"
 );
-const { tenantOf } = await import("./tenant.js");
+const { tenantOf, assertCallerOwnsSession } = await import("./tenant.js");
 
 const ALPHA = { key: "alpha", environmentId: "alpha" };
 const BRAVO = { key: "bravo", environmentId: "bravo" };
@@ -321,5 +321,80 @@ describe("tenantOf", () => {
 	test("no claim on a hosted runtime fails the turn", () => {
 		process.env.WANIWANI_SERVICE_PRIVATE_KEY = SERVICE_KEY;
 		expect(() => tenantOf(auth({}))).toThrow(/WANIWANI_SERVICE_PRIVATE_KEY/);
+	});
+});
+
+describe("assertCallerOwnsSession", () => {
+	function principal(input: { subject: string; environmentId?: string }) {
+		const attributes: Record<string, string> = {};
+		if (input.environmentId) attributes.environmentId = input.environmentId;
+		return {
+			attributes,
+			authenticator: "jwt-hmac",
+			principalId: `waniwani:agent:${input.subject}`,
+			principalType: "service",
+			subject: input.subject,
+		};
+	}
+
+	test("a session's own creator passes", () => {
+		const only = principal({ subject: "visitor-1", environmentId: "env-1" });
+		expect(() =>
+			assertCallerOwnsSession({ current: only, initiator: only }),
+		).not.toThrow();
+	});
+
+	test("the same visitor continuing on a later request passes", () => {
+		expect(() =>
+			assertCallerOwnsSession({
+				current: principal({ subject: "visitor-1", environmentId: "env-1" }),
+				initiator: principal({ subject: "visitor-1", environmentId: "env-1" }),
+			}),
+		).not.toThrow();
+	});
+
+	test("another environment's token cannot continue the session", () => {
+		expect(() =>
+			assertCallerOwnsSession({
+				current: principal({ subject: "visitor-2", environmentId: "env-2" }),
+				initiator: principal({ subject: "visitor-1", environmentId: "env-1" }),
+			}),
+		).toThrow(/different environment/);
+	});
+
+	test("a token naming no environment cannot continue a tenant's session", () => {
+		expect(() =>
+			assertCallerOwnsSession({
+				current: principal({ subject: "visitor-1" }),
+				initiator: principal({ subject: "visitor-1", environmentId: "env-1" }),
+			}),
+		).toThrow(/different environment/);
+	});
+
+	test("another identified visitor cannot continue the session", () => {
+		expect(() =>
+			assertCallerOwnsSession({
+				current: principal({ subject: "visitor-2", environmentId: "env-1" }),
+				initiator: principal({ subject: "visitor-1", environmentId: "env-1" }),
+			}),
+		).toThrow(/different visitor/);
+	});
+
+	test("anonymous visitors share a subject, so only the environment separates them", () => {
+		expect(() =>
+			assertCallerOwnsSession({
+				current: principal({ subject: "anonymous", environmentId: "env-1" }),
+				initiator: principal({ subject: "anonymous", environmentId: "env-1" }),
+			}),
+		).not.toThrow();
+	});
+
+	test("an anonymous session survives the visitor identifying mid-conversation", () => {
+		expect(() =>
+			assertCallerOwnsSession({
+				current: principal({ subject: "visitor-1", environmentId: "env-1" }),
+				initiator: principal({ subject: "anonymous", environmentId: "env-1" }),
+			}),
+		).not.toThrow();
 	});
 });

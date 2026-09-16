@@ -1,14 +1,15 @@
 import { waniwani } from "@waniwani/sdk";
 import { defineHook } from "eve/hooks";
 import type { SessionAuth } from "eve/context";
-import { channelIdOf } from "../lib/tenant.js";
+import { ANONYMOUS, channelIdOf } from "../lib/tenant.js";
 
 type StreamEvent = {
 	meta: { id: string; at: string };
 	data?: Record<string, unknown>;
 };
 
-const ANONYMOUS = "anonymous";
+/** Hooks are awaited before the turn's resolvers, so delivery cannot be unbounded. */
+const DELIVERY_TIMEOUT_MS = 5_000;
 
 let analytics: ReturnType<typeof waniwani> | undefined;
 
@@ -32,6 +33,33 @@ function visitorIdOf(auth: SessionAuth): string | undefined {
 	return subject && subject !== ANONYMOUS ? subject : undefined;
 }
 
+async function deliver(
+	event: Parameters<NonNullable<typeof analytics>["track"]>[0],
+): Promise<void> {
+	if (!analytics) return;
+	await analytics.track(event);
+	await analytics.flush();
+}
+
+async function withDeadline(delivery: Promise<void>): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			delivery,
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(
+					() => reject(new Error("delivery timed out")),
+					DELIVERY_TIMEOUT_MS,
+				);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+		// The abandoned delivery keeps running; it must not surface unhandled.
+		void delivery.catch(() => {});
+	}
+}
+
 async function send(input: {
 	name: string;
 	event: StreamEvent;
@@ -45,7 +73,7 @@ async function send(input: {
 	}
 	try {
 		analytics ??= waniwani({ apiKey, apiUrl: process.env.WANIWANI_API_URL });
-		await analytics.track({
+		await withDeadline(deliver({
 			event: input.name,
 			eventId: `eve_${input.event.meta.id}`,
 			timestamp: input.event.meta.at,
@@ -57,8 +85,7 @@ async function send(input: {
 			},
 			metadata: { turnId: turnIdOf(input.event) },
 			// The ingestion API takes chat events; the SDK's public union omits them.
-		} as Parameters<typeof analytics.track>[0]);
-		await analytics.flush();
+		} as Parameters<typeof analytics.track>[0]));
 	} catch (error) {
 		console.error("[analytics] delivery failed", {
 			event: input.name,

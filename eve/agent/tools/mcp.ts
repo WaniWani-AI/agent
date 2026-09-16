@@ -1,12 +1,10 @@
 import { defineDynamic, defineTool } from "eve/tools";
 import type { JsonObject } from "../lib/json.js";
 import { callMcpTool, type McpMeta, textOf } from "../lib/mcp-catalog.js";
-import { channelIdOf, tenantOf } from "../lib/tenant.js";
+import { ANONYMOUS, channelIdOf, tenantOf } from "../lib/tenant.js";
 import { requireSnapshot } from "../lib/turn-snapshot.js";
 import type { SessionChannel } from "../lib/session-config.js";
 import type { DynamicResolveContext } from "eve/tools";
-
-const ANONYMOUS = "anonymous";
 
 // Session identity belongs to the runtime, never to the model.
 function withoutSessionId(schema: JsonObject): JsonObject {

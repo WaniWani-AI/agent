@@ -47,18 +47,31 @@ function forget(tenantKey: string): void {
 	void open?.client.then((client) => client.close()).catch(() => {});
 }
 
+const MAX_TOOL_PAGES = 50;
+
 export async function listMcpTools(input: {
 	tenantKey: string;
 	mcpUrl: string;
 }): Promise<McpTool[]> {
 	const client = await clientFor(input.tenantKey, input.mcpUrl);
 	try {
-		const { tools } = await client.listTools();
-		return tools.map((tool) => ({
-			name: tool.name,
-			description: tool.description,
-			inputSchema: tool.inputSchema as JsonObject,
-		}));
+		const collected: McpTool[] = [];
+		let cursor: string | undefined;
+		for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
+			const result = await client.listTools(cursor ? { cursor } : undefined);
+			for (const tool of result.tools) {
+				collected.push({
+					name: tool.name,
+					description: tool.description,
+					inputSchema: tool.inputSchema as JsonObject,
+				});
+			}
+			if (!result.nextCursor || result.nextCursor === cursor) {
+				return collected;
+			}
+			cursor = result.nextCursor;
+		}
+		throw new Error(`MCP server paged past ${MAX_TOOL_PAGES} tool pages`);
 	} catch (error) {
 		forget(input.tenantKey);
 		throw error;
@@ -74,19 +87,20 @@ export async function callMcpTool(input: {
 	abortSignal: AbortSignal;
 }): Promise<unknown> {
 	const client = await clientFor(input.tenantKey, input.mcpUrl);
+	const signal = AbortSignal.any([
+		input.abortSignal,
+		AbortSignal.timeout(60_000),
+	]);
 	const result = await client
 		.callTool(
 			{ name: input.name, arguments: input.arguments, _meta: input.meta },
 			undefined,
-			{
-				signal: AbortSignal.any([
-					input.abortSignal,
-					AbortSignal.timeout(60_000),
-				]),
-			},
+			{ signal },
 		)
 		.catch((error: unknown) => {
-			forget(input.tenantKey);
+			// The client is shared by every session on this tenant, so one cancelled
+			// call must not close it out from under the others.
+			if (!signal.aborted) forget(input.tenantKey);
 			throw error;
 		});
 
