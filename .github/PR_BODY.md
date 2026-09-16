@@ -33,11 +33,21 @@ The `turn.started` gate now rejects a continuation whose `environmentId` differs
 session's, or whose `sub` differs when both sides name a real visitor rather than `anonymous`.
 Seven cases pin it.
 
-The read-only half stays open. `GET /eve/v1/session/:id/stream`, plus cancel, clear, compact and
-reset, answer before any authored code runs, so a valid token and a session id are enough to read
-a transcript or end a conversation. Session ids are ULIDs and are not guessable, but they are not
-a credential either, and they travel to the browser. Closing it needs either PR 4's adapter to own
-that boundary or an ownership check inside eve. Written up under "Who may address a session".
+The read-only half stays open, and needs a decision. `GET /eve/v1/session/:id/stream`, plus
+cancel, clear, compact and reset, answer before any authored code runs, so a valid token and a
+session id are enough to read a transcript or end a conversation. There is no stateless fix inside
+this repo: the auth function sees the request and nothing else, and a process-local owner map
+would deny every request after a restart, which check (c) exists to prevent.
+
+The fix that does work is one claim: mint the session token with `sid` once the session exists,
+and have the channel reject a request whose path names a different session. Stateless, exact, and
+it closes the reads as well as the writes. It costs a change to the token contract this ticket
+fixed ("Nothing else") and commits PR 4 to minting it. Say the word and I will add it to both.
+
+Until then, note that the ownership check has a sharp edge of its own: an unauthorized
+continuation now fails the turn, and a failing turn ends the session, so someone holding a session
+id can end a conversation they could previously only hijack. That trade was worth making, and it
+disappears with `sid`.
 
 ## Files moved from the branch, one line each
 
@@ -102,7 +112,7 @@ $ curl -s http://127.0.0.1:3002/_calls
 
 ```
 npx tsc --noEmit (eve)     clean
-bun test agent (eve)       26 pass | 0 fail
+bun test agent (eve)       27 pass | 0 fail
 bun test test/             5 pass | 0 fail
 docker compose up --wait   postgres, mcp, app, model, eve all healthy
 grep -rn "installation\|wwi_\|agent_token\|/agent/v1" eve/agent
@@ -122,6 +132,7 @@ Source budget: 869 lines in `eve/agent` against a target of about 700, 232 in `f
 - **Check (d) restarts the runtime to get a cold tenant.** In CI there is one tenant key, `self`, so an outage cannot make a brand-new session cold without one. The check asserts both halves the ticket asks for: an existing session keeps answering off the stale copy, and a cold one fails loudly instead of answering.
 - **Check (b) waits out the full sixty-second floor**, then spends one turn kicking the background pass before asserting on the next. A publish lands on the turn after the revalidation, which is what "always off the turn path" costs.
 - **Tests here were written by the same model that wrote the code.** The app's tester-subagent rule does not exist in this repo, per the ticket.
+- **Eight review rounds, converging.** Round 8 reported no actionable defects. Across the earlier rounds: an anonymous caller could continue an identified visitor's session; one public key attributed every tenant's transcript to whoever owned it; a mid-turn restart parked the conversation forever, reproduced by killing the container during a model call; the MCP client cached per tenant fought itself when the published URL moved; `tools/list` pagination dropped every page after the first; `withoutSessionId` stripped an argument nothing put back, so a server declaring it rejected every call; and `.secrets/` was not ignored while the docs told operators to create credentials there. One claim did not survive: a review round said the compiled tool callback persists a BYO model key into durable state. A canary key reached the model and appeared in zero rows of `workflow_runs`, `workflow_steps` or the job queue, so it was dismissed on evidence, though the closure was narrowed anyway.
 - **What the review pass changed.** `/codex:review` raised six defects and all six were real. Beyond the authorization finding above: `tools/list` pagination was dropped after the first page, so an MCP server with a paged catalog silently lost tools; a cancelled or timed-out tool call closed the MCP client shared by every session on that tenant, failing unrelated visitors; analytics delivery was awaited inside a hook with no deadline, so a stalled ingest endpoint could hold a conversation open; the reference `compose.yaml` never forwarded `AI_GATEWAY_API_KEY`, so a managed payload could not resolve a credential there at all; and the enrollment steps wrote `0600` secret files that the image's own `USER node` cannot read on Linux. An earlier self-review fixed three more: two empty-string env overrides that compose actually produces, an MCP client cached per tenant but never per endpoint, and an `entrypoint.sh` eval that mangles any `_FILE` secret carrying a space or a newline.
 
 ## Manual steps after merge
