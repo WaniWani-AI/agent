@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import { afterAll, expect, test } from "bun:test";
 import express from "express";
-import { agentRouter } from "../src/express.js";
+import { type AgentRouterOptions, agentRouter } from "../src/express.js";
 
 const PUBLIC_KEY = "wwp_test_public_key";
 const ORIGIN = "https://shop.example";
@@ -13,7 +13,7 @@ process.env.WANIWANI_API_URL = UNREACHABLE;
 
 const running: Server[] = [];
 
-async function mount(): Promise<string> {
+async function mount(overrides: Partial<AgentRouterOptions> = {}): Promise<string> {
 	const app = express();
 	app.use(
 		"/agent/v1",
@@ -24,6 +24,7 @@ async function mount(): Promise<string> {
 			allowedOrigins: [ORIGIN],
 			title: "Fixture",
 			mcpLoopbackUrl: `${UNREACHABLE}/mcp`,
+			...overrides,
 		}),
 	);
 	const server = app.listen(0);
@@ -147,4 +148,50 @@ test("a widget posts from the origin this router serves it on", async () => {
 	// Past the origin check, and only the unreachable app behind it fails.
 	expect(posted.status).not.toBe(403);
 	expect(posted.status).toBe(502);
+});
+
+test("a turn whose stream dies is cancelled on the runtime", async () => {
+	const cancelled: string[] = [];
+	const runtime = Bun.serve({
+		port: 0,
+		fetch(request) {
+			const { pathname } = new URL(request.url);
+			if (pathname === "/eve/v1/session") {
+				return Response.json({ ok: true, sessionId: "wrun_dies" });
+			}
+			if (pathname.endsWith("/cancel")) {
+				cancelled.push(pathname);
+				return Response.json({ ok: true, status: "no_active_turn" });
+			}
+			// Half an answer, then a body that ends with the turn still running.
+			return new Response('{"type":"message.appended","data":{"messageDelta":"half"}}\n', {
+				headers: { "content-type": "application/x-ndjson" },
+			});
+		},
+	});
+
+	try {
+		const base = await mount({ eveUrl: `http://127.0.0.1:${runtime.port}` });
+		const response = await fetch(base, {
+			method: "POST",
+			headers: {
+				authorization: `Bearer ${PUBLIC_KEY}`,
+				"content-type": "application/json",
+				origin: ORIGIN,
+			},
+			body: JSON.stringify({
+				messages: [{ role: "user", parts: [{ type: "text", text: "hello" }] }],
+			}),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain('"finishReason":"error"');
+
+		// The close handler runs once the response is off the wire.
+		for (let attempt = 0; attempt < 40 && cancelled.length === 0; attempt += 1) {
+			await Bun.sleep(25);
+		}
+		expect(cancelled).toEqual(["/eve/v1/session/wrun_dies/cancel"]);
+	} finally {
+		runtime.stop(true);
+	}
 });

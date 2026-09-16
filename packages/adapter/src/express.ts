@@ -126,6 +126,21 @@ function widgetContext(
 	};
 }
 
+/**
+ * A turn ends itself with a `finish`. A transport failure ends the response
+ * without one, and leaves that turn running on the runtime.
+ */
+function watchTurnEnd(
+	ended: () => void,
+): TransformStream<UIMessageChunk, UIMessageChunk> {
+	return new TransformStream<UIMessageChunk, UIMessageChunk>({
+		transform(chunk, controller) {
+			if (chunk.type === "finish") ended();
+			controller.enqueue(chunk);
+		},
+	});
+}
+
 function stampWidgets(
 	context: WidgetContext,
 ): TransformStream<UIMessageChunk, UIMessageChunk> {
@@ -297,8 +312,18 @@ export function agentRouter(options: AgentRouterOptions): Router {
 			res.setHeader("x-session-id", turn.sessionId);
 			res.flushHeaders();
 			const context = widgetContext(req, turn.sessionId, title, publicKey);
-			await pipe(encodeSse(turn.chunks.pipeThrough(stampWidgets(context))), res);
-			finished = true;
+			await pipe(
+				encodeSse(
+					turn.chunks
+						.pipeThrough(stampWidgets(context))
+						.pipeThrough(
+							watchTurnEnd(() => {
+								finished = true;
+							}),
+						),
+				),
+				res,
+			);
 		} catch (error) {
 			next(error);
 		}
