@@ -28,7 +28,7 @@ export function resolveModelAccess(model: SessionModel): ModelAccess {
 		};
 	}
 	return {
-		baseUrl: process.env.AI_GATEWAY_BASE_URL ?? DEFAULT_GATEWAY_BASE_URL,
+		baseUrl: process.env.AI_GATEWAY_BASE_URL || DEFAULT_GATEWAY_BASE_URL,
 		apiKey: required("AI_GATEWAY_API_KEY", process.env.AI_GATEWAY_API_KEY),
 		modelId: model.modelId,
 		providerOptions: null,

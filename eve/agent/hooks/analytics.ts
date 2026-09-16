@@ -114,7 +114,7 @@ export default defineHook({
 			});
 		},
 		"step.started": (event, ctx) => {
-			stepModels.set(ctx.session.id, event.data.modelId);
+			if (enabled()) stepModels.set(ctx.session.id, event.data.modelId);
 		},
 		"step.completed": (event, ctx) => {
 			const usage = event.data.usage;
@@ -150,6 +150,9 @@ export default defineHook({
 			});
 		},
 		"turn.completed": (_event, ctx) => {
+			stepModels.delete(ctx.session.id);
+		},
+		"turn.cancelled": (_event, ctx) => {
 			stepModels.delete(ctx.session.id);
 		},
 	},

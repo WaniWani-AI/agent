@@ -10,10 +10,10 @@ export type McpTool = {
 
 export type McpMeta = Record<string, unknown>;
 
-const clients = new Map<string, Promise<Client>>();
+const clients = new Map<string, { endpoint: string; client: Promise<Client> }>();
 
 function mcpEndpoint(mcpUrl: string): string {
-	return `${process.env.WANIWANI_MCP_URL ?? mcpUrl}/mcp`;
+	return `${process.env.WANIWANI_MCP_URL || mcpUrl}/mcp`;
 }
 
 async function connect(endpoint: string): Promise<Client> {
@@ -24,21 +24,27 @@ async function connect(endpoint: string): Promise<Client> {
 
 function clientFor(tenantKey: string, mcpUrl: string): Promise<Client> {
 	const endpoint = mcpEndpoint(mcpUrl);
-	let client = clients.get(tenantKey);
-	if (!client) {
-		client = connect(endpoint).catch((error: unknown) => {
-			clients.delete(tenantKey);
-			throw error;
-		});
-		clients.set(tenantKey, client);
+	const open = clients.get(tenantKey);
+	if (open?.endpoint === endpoint) {
+		return open.client;
 	}
-	return client;
+	if (open) forget(tenantKey);
+
+	const entry: { endpoint: string; client: Promise<Client> } = {
+		endpoint,
+		client: connect(endpoint).catch((error: unknown) => {
+			if (clients.get(tenantKey) === entry) clients.delete(tenantKey);
+			throw error;
+		}),
+	};
+	clients.set(tenantKey, entry);
+	return entry.client;
 }
 
 function forget(tenantKey: string): void {
-	const client = clients.get(tenantKey);
+	const open = clients.get(tenantKey);
 	clients.delete(tenantKey);
-	void client?.then((open) => open.close()).catch(() => {});
+	void open?.client.then((client) => client.close()).catch(() => {});
 }
 
 export async function listMcpTools(input: {
