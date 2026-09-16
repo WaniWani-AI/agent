@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import {
 	afterEach,
 	beforeEach,
@@ -15,10 +16,11 @@ const API_URL = "https://app.test.invalid";
 const CONFIG_PATH = "/api/mcp/agent/config";
 const MCP_URL = "http://mcp.test.invalid:3002";
 
-// A real Ed25519 key, so the hosted path mints its service token without a network.
-const SERVICE_KEY = `-----BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEIDxJlf0Lueua1UGrOO6qrMQZurg7sx7VX2z5sdRWCpp0
------END PRIVATE KEY-----`;
+// Generated per run: the hosted path has to mint a real service token, and a
+// PEM committed to a public repo is a secret-scanner alert for no reason.
+const SERVICE_KEY = generateKeyPairSync("ed25519")
+	.privateKey.export({ type: "pkcs8", format: "pem" })
+	.toString();
 
 type Recorded = {
 	url: string;
