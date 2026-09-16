@@ -88,11 +88,17 @@ export async function runTurn(input: RunTurnInput): Promise<{
 		? await continueEveSession(target, continuing, body)
 		: 0;
 
+	// The turn is already running by now, so a stream we cannot attach to would
+	// leave the runtime answering into nothing. That includes a browser dropping
+	// inside the window between taking the turn and opening its stream.
 	const events = await openEveStream({
 		target,
 		sessionId,
 		startIndex,
 		...(input.signal ? { signal: input.signal } : {}),
+	}).catch(async (error: unknown) => {
+		await cancelEveTurn(target, sessionId).catch(() => {});
+		throw error;
 	});
 	return { sessionId, chunks: events.pipeThrough(uiMessageChunks()) };
 }

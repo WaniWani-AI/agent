@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import type { EveEvent } from "../src/eve-client.js";
-import { type UIMessageChunk, uiMessageChunks } from "../src/ui-stream.js";
+import {
+	type UIMessageChunk,
+	uiMessageChunks,
+	withWidgetContext,
+} from "../src/ui-stream.js";
 
 /** One recorded turn off the CI stack: two steps, an `echo` call, one answer. */
 const TRANSCRIPT = new URL("fixtures/turn.ndjson", import.meta.url);
@@ -141,4 +145,25 @@ test("a failed turn ends the message as an error", async () => {
 		errorText: "No published configuration for this agent",
 	});
 	expect(chunks.at(-1)).toEqual({ type: "finish", finishReason: "error" });
+});
+
+test("stamps the widget context on all three view bindings", () => {
+	const context = {
+		endpoint: "https://shop.example/agent/v1/events",
+		sessionId: "wrun_1",
+		source: "Shop",
+	};
+	const stamped = (meta: Record<string, unknown>): unknown => {
+		const result = withWidgetContext({ _meta: meta, content: [] }, context);
+		return (result as { _meta: Record<string, unknown> })._meta["waniwani/widget"];
+	};
+
+	expect(stamped({ ui: { resourceUri: "ui://views/ext-apps/a.html" } })).toEqual(context);
+	expect(stamped({ "ui/resourceUri": "ui://views/ext-apps/a.html" })).toEqual(context);
+	expect(stamped({ "openai/outputTemplate": "ui://views/ext-apps/a.html" })).toEqual(context);
+
+	// A result that renders nothing is handed back untouched.
+	const plain = { _meta: { "waniwani/other": true }, content: [] };
+	expect(withWidgetContext(plain, context)).toBe(plain);
+	expect(withWidgetContext("just text", context)).toBe("just text");
 });

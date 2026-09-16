@@ -81,6 +81,16 @@ function rateLimit(): RequestHandler {
 	};
 }
 
+/** Whether the runtime would supply the session id to this tool. */
+function declaresSessionId(schema: unknown): boolean {
+	const properties = (schema as { properties?: unknown } | undefined)?.properties;
+	return (
+		typeof properties === "object" &&
+		properties !== null &&
+		"sessionId" in properties
+	);
+}
+
 /** The last user message's text, which is what the embed posts. */
 function requestedMessage(body: unknown): string | undefined {
 	const { messages } = (body ?? {}) as { messages?: Array<{ role?: string; parts?: unknown }> };
@@ -165,7 +175,9 @@ export function agentRouter(options: AgentRouterOptions): Router {
 	const apiUrl = process.env.WANIWANI_API_URL || "https://app.waniwani.ai";
 	const router = express.Router();
 
-	router.use(cors({ origin: allowedOrigins }));
+	// The embed reads the session id off the response to continue and cancel the
+	// conversation, and it is on another origin, so the header has to be exposed.
+	router.use(cors({ origin: allowedOrigins, exposedHeaders: ["x-session-id"] }));
 	router.use(rateLimit());
 
 	router.use((req, res, next) => {
@@ -295,12 +307,17 @@ export function agentRouter(options: AgentRouterOptions): Router {
 		try {
 			const result = await withMcp(mcpLoopbackUrl, publicOrigin(req), async (mcp) => {
 				const { tools } = await mcp.listTools();
-				if (typeof name !== "string" || !tools.some((tool) => tool.name === name)) {
-					return undefined;
-				}
+				const tool =
+					typeof name === "string"
+						? tools.find((candidate) => candidate.name === name)
+						: undefined;
+				if (!tool) return undefined;
+				// A strict schema rejects a property it never declared, so the session
+				// id goes only where the runtime would put it too.
+				const wantsSessionId = sessionId && declaresSessionId(tool.inputSchema);
 				return await mcp.callTool({
-					name,
-					arguments: { ...args, ...(sessionId ? { sessionId } : {}) },
+					name: tool.name,
+					arguments: { ...args, ...(wantsSessionId ? { sessionId } : {}) },
 				});
 			});
 			if (!result) {

@@ -42,15 +42,30 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * Tells a rendered MCP App resource where to send its own events. Only results
- * that carry a view resource get it. The router applies it, because the
- * endpoint it points at is the router's own mount URL.
+ * The three spellings of a view binding are not alternatives to choose between:
+ * they are what three host generations emit, and the SDK renders all three. See
+ * `resourceUriFromMeta` in the SDK's `shared/view-uri.ts`.
+ */
+function bindsView(meta: Record<string, unknown>): boolean {
+	const candidates = [
+		asRecord(meta.ui)?.resourceUri,
+		meta["ui/resourceUri"],
+		meta["openai/outputTemplate"],
+	];
+	return candidates.some(
+		(candidate) => typeof candidate === "string" && candidate.length > 0,
+	);
+}
+
+/**
+ * Tells a rendered MCP App resource where to send its own events, and which
+ * session it belongs to. The router applies it, because the endpoint it points
+ * at is the router's own mount URL.
  */
 export function withWidgetContext(output: unknown, context: WidgetContext): unknown {
 	const result = asRecord(output);
 	const meta = result && asRecord(result._meta);
-	const ui = meta && asRecord(meta.ui);
-	if (!result || !meta || !ui?.resourceUri) {
+	if (!result || !meta || !bindsView(meta)) {
 		return output;
 	}
 	return { ...result, _meta: { ...meta, "waniwani/widget": context } };
