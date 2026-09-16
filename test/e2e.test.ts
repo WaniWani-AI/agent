@@ -52,6 +52,14 @@ function credential(claims: Record<string, unknown> = {}): string {
 	return `${header}.${payload}.${signature}`;
 }
 
+/**
+ * eve authorizes no session-addressed route, so a hosted token names the one it
+ * may touch. The self-hosted key is not a per-visitor token and carries nothing.
+ */
+function bindTo(token: string, sessionId: string): string {
+	return HOSTED ? credential({ sid: sessionId }) : token;
+}
+
 async function control(patch: Record<string, unknown>): Promise<void> {
 	const response = await fetch(`${APP}/_control`, {
 		method: "POST",
@@ -68,7 +76,7 @@ async function readStream(
 ): Promise<StreamEvent[]> {
 	const response = await fetch(
 		`${EVE}/eve/v1/session/${sessionId}/stream?startIndex=${startIndex}`,
-		{ headers: { authorization: `Bearer ${token}` } },
+		{ headers: { authorization: `Bearer ${bindTo(token, sessionId)}` } },
 	);
 	if (!response.ok || !response.body) {
 		throw new Error(`stream failed (${response.status})`);
@@ -133,9 +141,10 @@ async function sendTurn(
 	message: string,
 	token: string,
 ): Promise<StreamEvent[]> {
+	const bound = bindTo(token, sessionId);
 	const before = await fetch(
 		`${EVE}/eve/v1/session/${sessionId}/stream?startIndex=0&includeTailIndex=1`,
-		{ headers: { authorization: `Bearer ${token}` } },
+		{ headers: { authorization: `Bearer ${bound}` } },
 	);
 	const tail = Number(before.headers.get("x-eve-stream-tail-index") ?? 0);
 	await before.body?.cancel().catch(() => {});
@@ -146,7 +155,7 @@ async function sendTurn(
 		const response = await fetch(`${EVE}/eve/v1/session/${sessionId}`, {
 			method: "POST",
 			headers: {
-				authorization: `Bearer ${token}`,
+				authorization: `Bearer ${bound}`,
 				"content-type": "application/json",
 			},
 			body: JSON.stringify({ message }),
@@ -315,3 +324,36 @@ onHosted("(h) a managed model reaches the gateway base URL with the gateway key"
 	expect(seen.length).toBeGreaterThan(0);
 	expect(seen[0]?.authorization).toBe("Bearer test");
 }, 300_000);
+
+onHosted(
+	"(h2) a hosted token reaches only the session it names",
+	async () => {
+		const { sessionId } = await startSession("hello", credential());
+
+		const unbound = await fetch(
+			`${EVE}/eve/v1/session/${sessionId}/stream?startIndex=0`,
+			{ headers: { authorization: `Bearer ${credential()}` } },
+		);
+		await unbound.body?.cancel().catch(() => {});
+		expect(unbound.status).toBe(401);
+
+		const elsewhere = await fetch(
+			`${EVE}/eve/v1/session/${sessionId}/stream?startIndex=0`,
+			{
+				headers: {
+					authorization: `Bearer ${credential({ sid: "wrun_somebody_else" })}`,
+				},
+			},
+		);
+		await elsewhere.body?.cancel().catch(() => {});
+		expect(elsewhere.status).toBe(401);
+
+		const bound = await fetch(
+			`${EVE}/eve/v1/session/${sessionId}/stream?startIndex=0&includeTailIndex=1`,
+			{ headers: { authorization: `Bearer ${credential({ sid: sessionId })}` } },
+		);
+		await bound.body?.cancel().catch(() => {});
+		expect(bound.status).toBe(200);
+	},
+	120_000,
+);

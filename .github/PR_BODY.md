@@ -40,33 +40,29 @@ mints, which makes it an end-to-end proof of the whole hosted path: the mock Wan
 Ed25519 service token the runtime signs. `ci/keygen.mjs` mints that keypair per run, so no private
 key is committed.
 
-## 🚨 eve authorizes no session-addressed route
+## eve authorizes no session-addressed route, so the token names its session
 
 Every route under `/eve/v1/session/:id` runs `routeAuth` and then hands the request to
-`attachSession(sessionId)`. Nothing compares the caller to the session. Confirmed by reading
-`eve-channel/index.js`, and it matters here because `tenantOf` reads the *initiator's*
-`environmentId`: a token valid for one environment could post into another environment's session
-and be answered using that environment's prompt, model and MCP server.
+`attachSession(sessionId)`. Nothing compares the caller to the session, confirmed by reading
+`eve-channel/index.js`. On the hosted form that let any valid visitor JWT stream another session's
+transcript or cancel, clear, compact and reset it, across environments, since `tenantOf` reads the
+initiator's `environmentId`.
 
-The `turn.started` gate now rejects a continuation whose `environmentId` differs from the
-session's, or whose `sub` differs when both sides name a real visitor rather than `anonymous`.
-Seven cases pin it.
+The hosted token now carries `sid`: absent on the request that creates a session, and equal to the
+session id on every request that names one. The channel compares it against the URL before eve
+dispatches, so the reads and the controls are covered rather than only follow-up turns. Check (h2)
+pins all three cases: no claim is 401, a different session's claim is 401, the right one is 200.
 
-The read-only half stays open, and needs a decision. `GET /eve/v1/session/:id/stream`, plus
-cancel, clear, compact and reset, answer before any authored code runs, so a valid token and a
-session id are enough to read a transcript or end a conversation. There is no stateless fix inside
-this repo: the auth function sees the request and nothing else, and a process-local owner map
-would deny every request after a restart, which check (c) exists to prevent.
+This adds one claim past the ticket's "Nothing else", and **WAN-1148 has to mint it** or every
+hosted request that names a session gets a 401. It is in the operator doc's claim table.
 
-The fix that does work is one claim: mint the session token with `sid` once the session exists,
-and have the channel reject a request whose path names a different session. Stateless, exact, and
-it closes the reads as well as the writes. It costs a change to the token contract this ticket
-fixed ("Nothing else") and commits PR 4 to minting it. Say the word and I will add it to both.
+The self-hosted form needs none of this. Its credential is the environment key, which lives in the
+customer's backend and never reaches a browser, so whoever holds it already speaks for the whole
+environment. `x-waniwani-visitor` is an assertion that backend makes, not a credential a visitor
+presents.
 
-Until then, note that the ownership check has a sharp edge of its own: an unauthorized
-continuation now fails the turn, and a failing turn ends the session, so someone holding a session
-id can end a conversation they could previously only hijack. That trade was worth making, and it
-disappears with `sid`.
+A turn is still checked at `turn.started` as well: a continuation whose environment or visitor
+differs from the session's creator fails there.
 
 ## Files moved from the branch, one line each
 

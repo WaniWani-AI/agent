@@ -74,6 +74,7 @@ minted server-side.
 | `sub` | The visitor's id, or the literal `anonymous`. Never empty. |
 | `environmentId` | Required. Which environment this conversation belongs to. |
 | `channelId` | Optional. The channel the conversation is attributed to. |
+| `sid` | The session this token may address. Omit it on the request that creates a session; required on every request that names one. |
 | `exp` | At most five minutes out. |
 | `jti` | Unique per token. |
 
@@ -83,17 +84,20 @@ minted server-side.
 
 eve authenticates every session-addressed route and authorizes none of them. `routeAuth` runs the
 channel's auth function and then hands the request straight to `attachSession(sessionId)`, so a
-token that verifies is accepted against any session id it names.
+credential that verifies would otherwise be accepted against any session id it names.
 
-The `turn.started` gate closes the half that changes state. A request continuing someone else's
-session must carry the same `environmentId` the session was created with, and, when both sides
-name a real visitor rather than `anonymous`, the same `sub`. A mismatch fails the turn.
+On the hosted form the token closes that itself. Mint it without `sid` for the request that
+creates a session, then with `sid` set to the id that comes back for every request that names one.
+The channel compares the claim against the session in the URL and rejects a mismatch, which covers
+the stream, cancel, clear, compact and reset routes as well as follow-up turns.
 
-The half that only reads is still open. `GET /eve/v1/session/:id/stream` and the cancel, clear,
-compact and reset routes reach eve before any authored code runs, so a valid token plus a session
-id is enough to read a transcript or end a conversation. Session ids are ULIDs and are not
-guessable, but they are not a credential either. Closing this needs either the adapter in front of
-the runtime to own the boundary, or an ownership check inside eve.
+On the self-hosted form the credential is the environment key, which lives in your backend and
+never reaches a browser. Whoever holds it already speaks for the whole environment, so there is
+nothing to separate; the `x-waniwani-visitor` header is an assertion that backend makes, not a
+credential the visitor presents.
+
+Either way a turn is also checked at `turn.started`: a continuation whose environment or visitor
+differs from the session's creator fails.
 
 ## How configuration reaches a turn
 

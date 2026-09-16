@@ -40,11 +40,11 @@ configuration never answers, and the one-minute floor means the three retries co
 rather than four. What is lost is resumability: that conversation is over, and the next message
 starts a new session.
 
-**And one open hole.** eve authenticates session-addressed routes but never authorizes them. The
-gate rejects a cross-tenant or cross-visitor continuation, so nothing writes into a session it does
-not own. Reading one is still possible for anyone holding a valid token and a session id, because
-`GET /eve/v1/session/:id/stream` and the cancel, clear, compact and reset routes answer before any
-authored code runs. See "Who may address a session" in the operator doc.
+**Who may address a session.** eve authenticates session-addressed routes but never authorizes
+them, so the hosted token carries a `sid` claim naming the one session it may touch and the channel
+rejects a mismatch before eve dispatches. That covers the stream and the control routes, not just
+follow-up turns. The self-hosted key holder speaks for the whole environment and needs no such
+separation. See "Who may address a session" in the operator doc.
 
 **And one narrow window.** eve does not re-emit `turn.started` for a turn it resumes after a
 restart, so the snapshot is rebuilt from the tenant's current configuration rather than the one
