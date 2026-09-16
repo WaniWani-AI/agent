@@ -59,10 +59,9 @@ export function assertCallerOwnsSession(auth: SessionAuth | undefined): void {
 		);
 	}
 
-	// Asymmetric on purpose: an anonymous session may become identified as the
-	// visitor signs in, but an identified one never reopens to anonymous.
-	const owned = initiator.subject && initiator.subject !== ANONYMOUS;
-	if (owned && current.subject !== initiator.subject) {
+	// A session's visitor is fixed when it is created, because `_meta.visitorId`
+	// and every analytics event read the initiator. Signing in starts a new one.
+	if (current.subject !== initiator.subject) {
 		throw new Error(
 			"Session token names a different visitor than the session it addresses",
 		);

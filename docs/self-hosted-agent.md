@@ -140,6 +140,11 @@ environment.
 
 ## Not in this release
 
+A session's visitor is fixed when it is created. A token continuing it has to carry the same
+`sub`, because `_meta.visitorId` and every analytics event read the session's initiator. A visitor
+who signs in mid-conversation starts a new session.
+
+
 A failure the runtime cannot recover from ends the session rather than the turn. See the note on
 `turn.started` in the README.
 

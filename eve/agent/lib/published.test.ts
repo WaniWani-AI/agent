@@ -398,12 +398,12 @@ describe("assertCallerOwnsSession", () => {
 		).toThrow(/different visitor/);
 	});
 
-	test("an anonymous session survives the visitor identifying mid-conversation", () => {
+	test("a visitor identifying mid-conversation has to start a new session", () => {
 		expect(() =>
 			assertCallerOwnsSession({
 				current: principal({ subject: "visitor-1", environmentId: "env-1" }),
 				initiator: principal({ subject: "anonymous", environmentId: "env-1" }),
 			}),
-		).not.toThrow();
+		).toThrow(/different visitor/);
 	});
 });

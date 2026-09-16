@@ -42,6 +42,12 @@ not own. Reading one is still possible for anyone holding a valid token and a se
 `GET /eve/v1/session/:id/stream` and the cancel, clear, compact and reset routes answer before any
 authored code runs. See "Who may address a session" in the operator doc.
 
+**And one narrow window.** eve does not re-emit `turn.started` for a turn it resumes after a
+restart, so the snapshot is rebuilt from the tenant's current configuration rather than the one
+the turn began on. eve keeps the durable instructions and tool metadata, so a publish landing in
+that window can pair an older prompt with a newer model for the rest of that turn. Persisting the
+snapshot would fix it, and the ticket rules out holding configuration in durable state.
+
 ## Running CI locally
 
 ```sh
