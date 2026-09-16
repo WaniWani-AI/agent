@@ -200,12 +200,18 @@ test("(a) a first turn calls echo with _meta.sessionId and streams to turn.compl
 	expectCompleted(events);
 
 	const { calls } = (await (await fetch(`${MCP}/_calls`)).json()) as {
-		calls: Array<{ _meta: Record<string, unknown> | null }>;
+		calls: Array<{
+			_meta: Record<string, unknown> | null;
+			arguments: Record<string, unknown>;
+		}>;
 	};
 	expect(calls).toHaveLength(1);
 	expect(calls[0]?._meta?.["waniwani/sessionId"]).toBe(sessionId);
 	expect(calls[0]?._meta?.["waniwani/source"]).toBe("website");
 	expect(calls[0]?._meta?.["waniwani/turnCount"]).toBe(1);
+	// The fixture tool declares sessionId, so the runtime supplies it rather
+	// than leaving the model to invent one.
+	expect(calls[0]?.arguments?.sessionId).toBe(sessionId);
 }, 120_000);
 
 test("(b) a republished prompt reaches the next turn", async () => {
