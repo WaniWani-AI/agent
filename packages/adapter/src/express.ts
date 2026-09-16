@@ -37,7 +37,9 @@ export type AgentRouterOptions = {
 function publicOrigin(req: Request): URL {
 	const forwarded = req.get("x-forwarded-host")?.split(",")[0]?.trim();
 	const host = forwarded || req.get("host");
-	const proto = req.get("x-forwarded-proto")?.split(",")[0]?.trim() || "http";
+	// `req.protocol` already reads the socket, so a server terminating TLS itself
+	// is not mistaken for plain HTTP and asked to serve a widget mixed content.
+	const proto = req.get("x-forwarded-proto")?.split(",")[0]?.trim() || req.protocol;
 	return new URL(`${proto}://${host}`);
 }
 
