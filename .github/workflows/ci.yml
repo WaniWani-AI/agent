@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: eve/package-lock.json
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Install the runtime's dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: eve
+
+      - name: Typecheck the agent
+        run: npx tsc --noEmit
+        working-directory: eve
+
+      - name: Unit tests
+        run: bun test agent
+        working-directory: eve
+
+      - name: Bring the stack up
+        run: docker compose -f compose.ci.yaml up --build --wait
+
+      - name: End-to-end tests
+        run: bun test test/
+
+      - name: Runtime logs
+        if: failure()
+        run: docker compose -f compose.ci.yaml logs --tail 400
+
+      - name: Bring the stack down
+        if: always()
+        run: docker compose -f compose.ci.yaml down -v

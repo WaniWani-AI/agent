@@ -1,0 +1,65 @@
+name: waniwani-agent-ci
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: eve
+      POSTGRES_PASSWORD: ci
+      POSTGRES_DB: eve
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eve"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mcp:
+    build: ./fixtures
+    command: bun run mcp/server.ts
+    environment:
+      PORT: "3002"
+    ports: ["127.0.0.1:3002:3002"]
+
+  app:
+    build: ./fixtures
+    command: bun run app/server.ts
+    environment:
+      PORT: "3004"
+      FIXTURE_MCP_URL: http://mcp:3002
+      FIXTURE_MODEL_URL: http://model:3003/v1
+    ports: ["127.0.0.1:3004:3004"]
+
+  model:
+    build: ./fixtures
+    command: bun run model/server.ts
+    environment:
+      PORT: "3003"
+    ports: ["127.0.0.1:3003:3003"]
+
+  eve:
+    build: ./eve
+    ports: ["127.0.0.1:3001:3001"]
+    environment:
+      PORT: "3001"
+      WORKFLOW_POSTGRES_URL: postgres://eve:ci@postgres:5432/eve
+      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
+      WORKFLOW_LOCAL_BASE_URL: http://eve:3001
+      WANIWANI_API_URL: http://app:3004
+      WANIWANI_API_KEY: wwk_test
+      WANIWANI_AGENT_SECRET: ci-agent-secret
+      WANIWANI_ANALYTICS: "off"
+      MODEL_API_KEY: byo-test
+      AI_GATEWAY_API_KEY: test
+      AI_GATEWAY_BASE_URL: http://model:3003/v1
+      WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS: "32000"
+    healthcheck:
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/eve/v1/health').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    depends_on:
+      postgres: { condition: service_healthy }
+      app: { condition: service_started }
+      mcp: { condition: service_started }
+      model: { condition: service_started }

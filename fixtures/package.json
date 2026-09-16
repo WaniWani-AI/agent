@@ -1,0 +1,14 @@
+{
+  "name": "waniwani-agent-fixtures",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "mcp": "bun run mcp/server.ts",
+    "app": "bun run app/server.ts",
+    "model": "bun run model/server.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "express": "5.2.1"
+  }
+}

@@ -1,0 +1,59 @@
+name: waniwani-agent
+
+# Reference deployment: the eve runtime and its Postgres. Your MCP server runs
+# wherever you already run it; point WANIWANI_MCP_URL at it, or leave it unset
+# and the runtime uses the URL WaniWani publishes for the environment.
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: eve
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: eve
+    volumes: ["workflow-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eve"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  eve:
+    build: ./eve
+    ports: ["127.0.0.1:${WANIWANI_AGENT_PORT:-3001}:3001"]
+    environment:
+      PORT: "3001"
+      WORKFLOW_POSTGRES_URL: postgres://eve:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/eve
+      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
+      WORKFLOW_LOCAL_BASE_URL: http://eve:3001
+      WANIWANI_API_URL: ${WANIWANI_API_URL:-https://app.waniwani.ai}
+      WANIWANI_API_KEY_FILE: /run/secrets/api_key
+      WANIWANI_AGENT_SECRET_FILE: /run/secrets/agent_secret
+      WANIWANI_MCP_URL: ${WANIWANI_MCP_URL:-}
+      WANIWANI_PUBLIC_KEY: ${WANIWANI_PUBLIC_KEY:-}
+      WANIWANI_ANALYTICS: ${WANIWANI_ANALYTICS:-off}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS: ${WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS:-32000}
+    secrets: [api_key, agent_secret]
+    healthcheck:
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/eve/v1/health').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # Your MCP server, when you want compose to run it too. Publish it on the
+  # network eve can reach and set WANIWANI_MCP_URL to its origin.
+  #
+  # mcp:
+  #   image: ghcr.io/your-org/your-mcp:latest
+  #   environment:
+  #     WANIWANI_API_KEY: ${WANIWANI_API_KEY:-}
+
+secrets:
+  api_key: { file: ./.secrets/api_key }
+  agent_secret: { file: ./.secrets/agent_secret }
+
+volumes:
+  workflow-data:
