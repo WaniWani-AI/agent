@@ -72,7 +72,7 @@ function createServer(): Server {
 
 const app = express();
 
-// The mount PR 8 gives the template: one env var, one router, beside `/mcp`.
+// The mount a deployment gets: one env var, one router, beside `/mcp`.
 const eveUrl = process.env.WANIWANI_AGENT_EVE_URL;
 if (eveUrl) {
 	app.use(

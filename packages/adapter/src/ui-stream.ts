@@ -21,7 +21,13 @@ export type UIMessageChunk =
 	| { type: "message-metadata"; messageMetadata: Record<string, unknown> }
 	| { type: "error"; errorText: string };
 
-export type WidgetContext = { endpoint: string; sessionId: string; source: string };
+export type WidgetContext = {
+	endpoint: string;
+	sessionId: string;
+	source: string;
+	/** What the widget presents to `endpoint`, which is the router's own key. */
+	token: string;
+};
 
 type Controller = TransformStreamDefaultController<UIMessageChunk>;
 
@@ -58,9 +64,9 @@ function bindsView(meta: Record<string, unknown>): boolean {
 }
 
 /**
- * Tells a rendered MCP App resource where to send its own events, and which
- * session it belongs to. The router applies it, because the endpoint it points
- * at is the router's own mount URL.
+ * Tells a rendered MCP App resource where to send its own events, merged over
+ * what the server already stamped. The endpoint and the token travel together,
+ * or the widget authenticates against the wrong door.
  */
 export function withWidgetContext(output: unknown, context: WidgetContext): unknown {
 	const result = asRecord(output);
@@ -68,7 +74,11 @@ export function withWidgetContext(output: unknown, context: WidgetContext): unkn
 	if (!result || !meta || !bindsView(meta)) {
 		return output;
 	}
-	return { ...result, _meta: { ...meta, "waniwani/widget": context } };
+	const existing = asRecord(meta["waniwani/widget"]) ?? {};
+	return {
+		...result,
+		_meta: { ...meta, "waniwani/widget": { ...existing, ...context } },
+	};
 }
 
 export function uiMessageChunks(): TransformStream<EveEvent, UIMessageChunk> {

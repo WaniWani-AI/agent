@@ -18,6 +18,7 @@ const WINDOW_MS = 60_000;
 const WINDOW_REQUESTS = 60;
 const MAX_EVENTS = 100;
 const UPSTREAM_TIMEOUT_MS = 10_000;
+const MAX_TOOL_PAGES = 50;
 
 export type AgentRouterOptions = {
 	/** Where the agent runtime listens, e.g. `http://eve:3001`. */
@@ -108,11 +109,17 @@ function requestedMessage(body: unknown): string | undefined {
 		.join("\n");
 }
 
-function widgetContext(req: Request, sessionId: string, source: string): WidgetContext {
+function widgetContext(
+	req: Request,
+	sessionId: string,
+	source: string,
+	token: string,
+): WidgetContext {
 	return {
 		endpoint: `${publicOrigin(req).origin}${req.baseUrl}/events`,
 		sessionId,
 		source,
+		token,
 	};
 }
 
@@ -130,25 +137,46 @@ function stampWidgets(
 	});
 }
 
-/** Runs one operation against this same process's `/mcp` route. */
+type McpTools = Awaited<ReturnType<McpClient["listTools"]>>["tools"];
+
+/**
+ * Runs one operation against this same process's `/mcp` route. The environment
+ * key goes out as the bearer, which is what the runtime presents to that same
+ * server, so one that authenticates the key answers both callers.
+ */
 async function withMcp<T>(
-	url: string,
-	origin: URL,
+	target: { url: string; origin: URL; apiKey: string },
 	operation: (client: McpClient) => Promise<T>,
 ): Promise<T> {
 	const client = new McpClient({ name: "waniwani-agent-adapter", version: "1" });
 	const headers = {
-		"x-forwarded-host": origin.host,
-		"x-forwarded-proto": origin.protocol.replace(":", ""),
+		authorization: `Bearer ${target.apiKey}`,
+		"x-forwarded-host": target.origin.host,
+		"x-forwarded-proto": target.origin.protocol.replace(":", ""),
 	};
 	try {
 		await client.connect(
-			new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers } }),
+			new StreamableHTTPClientTransport(new URL(target.url), {
+				requestInit: { headers },
+			}),
 		);
 		return await operation(client);
 	} finally {
 		await client.close();
 	}
+}
+
+/** Every page of the tool list, so a paginated server is fully callable. */
+async function listAllTools(mcp: McpClient): Promise<McpTools> {
+	const collected: McpTools = [];
+	let cursor: string | undefined;
+	for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
+		const result = await mcp.listTools(cursor ? { cursor } : undefined);
+		collected.push(...result.tools);
+		if (!result.nextCursor || result.nextCursor === cursor) return collected;
+		cursor = result.nextCursor;
+	}
+	throw new Error(`The MCP server paged past ${MAX_TOOL_PAGES} tool pages`);
 }
 
 async function pipe(frames: ReadableStream<Uint8Array>, res: Response): Promise<void> {
@@ -174,6 +202,11 @@ export function agentRouter(options: AgentRouterOptions): Router {
 	const { eveUrl, apiKey, publicKey, allowedOrigins, title, mcpLoopbackUrl } = options;
 	const apiUrl = process.env.WANIWANI_API_URL || "https://app.waniwani.ai";
 	const router = express.Router();
+	const loopback = <T>(
+		req: Request,
+		operation: (mcp: McpClient) => Promise<T>,
+	): Promise<T> =>
+		withMcp({ url: mcpLoopbackUrl, origin: publicOrigin(req), apiKey }, operation);
 
 	// The embed reads the session id off the response to continue and cancel the
 	// conversation, and it is on another origin, so the header has to be exposed.
@@ -252,7 +285,7 @@ export function agentRouter(options: AgentRouterOptions): Router {
 			res.setHeader("x-vercel-ai-ui-message-stream", "v1");
 			res.setHeader("x-session-id", turn.sessionId);
 			res.flushHeaders();
-			const context = widgetContext(req, turn.sessionId, title);
+			const context = widgetContext(req, turn.sessionId, title, publicKey);
 			await pipe(encodeSse(turn.chunks.pipeThrough(stampWidgets(context))), res);
 			finished = true;
 		} catch (error) {
@@ -290,9 +323,7 @@ export function agentRouter(options: AgentRouterOptions): Router {
 
 	router.get("/tools", async (req, res, next) => {
 		try {
-			const origin = publicOrigin(req);
-			const { tools } = await withMcp(mcpLoopbackUrl, origin, (mcp) => mcp.listTools());
-			res.json({ tools });
+			res.json({ tools: await loopback(req, listAllTools) });
 		} catch (error) {
 			next(error);
 		}
@@ -305,8 +336,8 @@ export function agentRouter(options: AgentRouterOptions): Router {
 		};
 		const sessionId = req.get("x-session-id");
 		try {
-			const result = await withMcp(mcpLoopbackUrl, publicOrigin(req), async (mcp) => {
-				const { tools } = await mcp.listTools();
+			const result = await loopback(req, async (mcp) => {
+				const tools = await listAllTools(mcp);
 				const tool =
 					typeof name === "string"
 						? tools.find((candidate) => candidate.name === name)
@@ -324,7 +355,12 @@ export function agentRouter(options: AgentRouterOptions): Router {
 				res.status(404).json({ error: "unknown_tool" });
 				return;
 			}
-			res.json(withWidgetContext(result, widgetContext(req, sessionId ?? "", title)));
+			res.json(
+				withWidgetContext(
+					result,
+					widgetContext(req, sessionId ?? "", title, publicKey),
+				),
+			);
 		} catch (error) {
 			next(error);
 		}
@@ -337,10 +373,7 @@ export function agentRouter(options: AgentRouterOptions): Router {
 			return;
 		}
 		try {
-			const origin = publicOrigin(req);
-			const resource = await withMcp(mcpLoopbackUrl, origin, (mcp) =>
-				mcp.readResource({ uri }),
-			);
+			const resource = await loopback(req, (mcp) => mcp.readResource({ uri }));
 			const content = resource.contents[0];
 			const html = !content
 				? undefined

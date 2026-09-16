@@ -152,6 +152,7 @@ test("stamps the widget context on all three view bindings", () => {
 		endpoint: "https://shop.example/agent/v1/events",
 		sessionId: "wrun_1",
 		source: "Shop",
+		token: "wwp_public",
 	};
 	const stamped = (meta: Record<string, unknown>): unknown => {
 		const result = withWidgetContext({ _meta: meta, content: [] }, context);
@@ -166,4 +167,32 @@ test("stamps the widget context on all three view bindings", () => {
 	const plain = { _meta: { "waniwani/other": true }, content: [] };
 	expect(withWidgetContext(plain, context)).toBe(plain);
 	expect(withWidgetContext("just text", context)).toBe("just text");
+});
+
+test("keeps what the server stamped beside the router's own endpoint", () => {
+	const context = {
+		endpoint: "https://shop.example/agent/v1/events",
+		sessionId: "wrun_1",
+		source: "Shop",
+		token: "wwp_public",
+	};
+	const stamped = withWidgetContext(
+		{
+			_meta: {
+				"openai/outputTemplate": "ui://views/ext-apps/a.html",
+				"waniwani/widget": {
+					endpoint: "https://app.waniwani.ai/api/mcp/events/v2/batch",
+					token: "a-widget-jwt",
+					geoLocation: { country: "NL" },
+				},
+			},
+			content: [],
+		},
+		context,
+	) as { _meta: Record<string, unknown> };
+
+	expect(stamped._meta["waniwani/widget"]).toEqual({
+		...context,
+		geoLocation: { country: "NL" },
+	});
 });

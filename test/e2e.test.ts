@@ -438,7 +438,7 @@ onSelfHosted("(e) the router streams a turn as the model writes it", async () =>
 	}
 }, 180_000);
 
-onSelfHosted("(f) an iframe loads a widget with the key in the query", async () => {
+onSelfHosted("(f) an iframe loads a widget, and a widget calls a tool", async () => {
 	const response = await fetch(
 		`${AGENT}/resource?uri=${encodeURIComponent(WIDGET_URI)}&token=${PUBLIC_KEY}`,
 	);
@@ -448,6 +448,38 @@ onSelfHosted("(f) an iframe loads a widget with the key in the query", async () 
 	const html = await response.text();
 	expect(html).toContain('<div id="echo"></div>');
 	expect(html.toLowerCase()).toStartWith("<!doctype html>");
+
+	await fetch(`${MCP}/_calls`, { method: "DELETE" });
+	const called = await fetch(`${AGENT}/tool`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${PUBLIC_KEY}`,
+			"content-type": "application/json",
+			origin: ORIGIN,
+			"x-session-id": "wrun_widget",
+		},
+		body: JSON.stringify({ name: "echo", arguments: { text: "from the widget" } }),
+	});
+	expect(called.status).toBe(200);
+
+	const result = (await called.json()) as {
+		content: Array<{ text: string }>;
+		_meta: Record<string, Record<string, unknown>>;
+	};
+	expect(result.content[0]?.text).toBe("echo: from the widget");
+	// The rendered widget learns where to report and what to present there.
+	expect(result._meta["waniwani/widget"]).toMatchObject({
+		sessionId: "wrun_widget",
+		token: PUBLIC_KEY,
+	});
+
+	const { calls } = (await (await fetch(`${MCP}/_calls`)).json()) as {
+		calls: Array<{ authorization: string | null; arguments: Record<string, unknown> }>;
+	};
+	// The router forwards the environment key, the way the runtime does, so a
+	// server that authenticates it answers both callers.
+	expect(calls[0]?.authorization).toBe("Bearer wwk_test");
+	expect(calls[0]?.arguments.sessionId).toBe("wrun_widget");
 }, 60_000);
 
 onSelfHosted("(g) the router refuses a missing key, a foreign origin and a flood", async () => {
