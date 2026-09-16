@@ -230,6 +230,7 @@ onSelfHosted("(a) a first turn calls echo with _meta.sessionId and streams to tu
 		calls: Array<{
 			_meta: Record<string, unknown> | null;
 			arguments: Record<string, unknown>;
+			authorization: string | null;
 		}>;
 	};
 	expect(calls).toHaveLength(1);
@@ -239,6 +240,9 @@ onSelfHosted("(a) a first turn calls echo with _meta.sessionId and streams to tu
 	// The fixture tool declares sessionId, so the runtime supplies it rather
 	// than leaving the model to invent one.
 	expect(calls[0]?.arguments?.sessionId).toBe(sessionId);
+	// A protected MCP server authenticates the environment key, the way the
+	// app's own chat route forwards it.
+	expect(calls[0]?.authorization).toBe("Bearer wwk_test");
 }, 120_000);
 
 onSelfHosted(

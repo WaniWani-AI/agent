@@ -12,6 +12,7 @@ const PORT = Number(process.env.PORT || 3002);
 const WIDGET_URI = "ui://views/ext-apps/echo.html";
 
 const calls: unknown[] = [];
+let authorization: string | null = null;
 
 const TOOLS = [
 	{
@@ -56,6 +57,7 @@ function createServer(): Server {
 		calls.push({
 			name: request.params.name,
 			arguments: args,
+			authorization,
 			_meta: request.params._meta ?? null,
 		});
 		return {
@@ -77,6 +79,7 @@ app.delete("/_calls", (_request, response) => {
 });
 
 app.post("/mcp", async (request, response) => {
+	authorization = request.headers.authorization ?? null;
 	const server = createServer();
 	const transport = new StreamableHTTPServerTransport({
 		sessionIdGenerator: undefined,

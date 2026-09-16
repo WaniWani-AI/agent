@@ -119,6 +119,16 @@ A failed check keeps the copy already in memory and logs. Conversations carry on
 that has never loaded a configuration fails the turn with that error rather than answering on a
 prompt nobody published, and retries at the same one-minute cadence rather than on every message.
 
+## Reaching your MCP server
+
+A self-hosted runtime forwards its environment key to your MCP server as
+`Authorization: Bearer wwk_…`, which is what the hosted chat route already does, so a server that
+authenticates the key accepts the agent too.
+
+A WaniWani-hosted runtime sends no such header. The app stores only a hash of that key, so nothing
+can hand the runtime the plaintext. Until a credential broker lands, a hosted runtime works
+against an MCP server that does not require the key.
+
 ## The model
 
 WaniWani resolves the model when it serves the configuration. The runtime never substitutes a
@@ -130,6 +140,10 @@ different one.
 | `byo` | The base URL on the payload | The key on the payload, else `MODEL_API_KEY` |
 
 A missing key fails the turn with a message naming the variable. There is no fallback.
+
+A self-hosted deployment on its own model sets `MODEL_API_KEY` to that provider's key. A hosted
+runtime has no equivalent, because the org's credential is sealed in the app and the published
+config carries no key, so hosted deployments are on managed inference until a broker lands.
 
 ## Environment
 

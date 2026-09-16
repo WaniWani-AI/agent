@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { JsonObject } from "./json.js";
+import { credentialForm } from "./tenant.js";
 import { textOf } from "./tool-output.js";
 
 export type McpTool = {
@@ -26,9 +27,25 @@ function cacheKey(tenantKey: string, endpoint: string): string {
 	return `${tenantKey}\u0000${endpoint}`;
 }
 
+/**
+ * A customer's MCP server authenticates the environment key, the way the app's
+ * own `agentServerAuthHeader` forwards it. A hosted runtime holds no such key,
+ * because the app stores only its hash, so it sends none.
+ */
+function upstreamHeaders(): Record<string, string> | undefined {
+	if (credentialForm() !== "self-hosted") return undefined;
+	const apiKey = process.env.WANIWANI_API_KEY;
+	return apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
+}
+
 async function connect(endpoint: string): Promise<Client> {
 	const client = new Client({ name: "waniwani-agent", version: "1.0.0" });
-	await client.connect(new StreamableHTTPClientTransport(new URL(endpoint)));
+	const headers = upstreamHeaders();
+	await client.connect(
+		new StreamableHTTPClientTransport(new URL(endpoint), {
+			...(headers ? { requestInit: { headers } } : {}),
+		}),
+	);
 	return client;
 }
 
