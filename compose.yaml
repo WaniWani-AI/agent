@@ -1,0 +1,82 @@
+name: waniwani-agent
+
+# Reference deployment: the eve runtime and its Postgres. Your MCP server runs
+# wherever you already run it; point WANIWANI_MCP_URL at it, or leave it unset
+# and the runtime uses the URL WaniWani publishes for the environment.
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: eve
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: eve
+    volumes: ["workflow-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eve"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  eve:
+    build: ./eve
+    ports: ["127.0.0.1:${WANIWANI_AGENT_PORT:-3001}:3001"]
+    environment:
+      # Required. Fixed by this file; you should not need to touch them.
+      PORT: "3001"
+      WORKFLOW_POSTGRES_URL: postgres://eve:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/eve
+      WORKFLOW_LOCAL_BASE_URL: http://eve:3001
+
+      # Required. Your environment key, which is both your identity to WaniWani
+      # and the credential your backend presents to this runtime. Mounted from
+      # ./.secrets. Setting WANIWANI_AGENT_SECRET as well refuses to start:
+      # that is the WaniWani-hosted form, which takes a JWT per visitor instead.
+      WANIWANI_API_KEY_FILE: /run/secrets/api_key
+
+      # Required for the model the environment publishes. `byo` needs
+      # MODEL_API_KEY unless the payload carries its own key; `managed` needs
+      # AI_GATEWAY_API_KEY. A missing key fails the turn and names the variable.
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+
+      # Optional. WaniWani region URL, when you are not on the US stack.
+      WANIWANI_API_URL: ${WANIWANI_API_URL:-https://app.waniwani.ai}
+      # Optional. Where your MCP server is reachable from inside this network,
+      # when that differs from the URL WaniWani publishes for the environment.
+      WANIWANI_MCP_URL: ${WANIWANI_MCP_URL:-}
+      # Optional. Channel that turns are attributed to. Must be one this
+      # environment published. Defaults to its first channel.
+      WANIWANI_CHANNEL_ID: ${WANIWANI_CHANNEL_ID:-}
+      # Optional. `ingest` reports transcripts to WaniWani, `off` reports
+      # nothing. WANIWANI_PUBLIC_KEY is required when it is on.
+      WANIWANI_ANALYTICS: ${WANIWANI_ANALYTICS:-off}
+      WANIWANI_PUBLIC_KEY: ${WANIWANI_PUBLIC_KEY:-}
+      # Optional. Context window assumed for a model the runtime cannot look up.
+      WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS: ${WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS:-32000}
+      # Optional. Points managed inference somewhere other than the AI Gateway.
+      # Leave empty in production.
+      AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
+      # Tuning. Concurrent durable workers.
+      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
+    secrets: [api_key]
+    healthcheck:
+      test:
+        ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/eve/v1/health').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # Your MCP server, when you want compose to run it too. Publish it on the
+  # network eve can reach and set WANIWANI_MCP_URL to its origin.
+  #
+  # mcp:
+  #   image: ghcr.io/your-org/your-mcp:latest
+  #   environment:
+  #     WANIWANI_API_KEY: ${WANIWANI_API_KEY:-}
+
+secrets:
+  api_key: { file: ./.secrets/api_key }
+
+volumes:
+  workflow-data:

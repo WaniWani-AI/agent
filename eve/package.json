@@ -1,0 +1,27 @@
+{
+  "name": "waniwani-agent-runtime",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "eve build",
+    "start": "eve start --host 0.0.0.0",
+    "test": "bun test agent",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "4.0.36",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@waniwani/sdk": "^0.19.8",
+    "@workflow/world-postgres": "5.0.0-beta.40",
+    "ai": "7.0.82",
+    "eve": "0.52.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/node": "24.9.2",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

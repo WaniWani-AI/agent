@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: eve/package-lock.json
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Install the runtime's dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: eve
+
+      - name: Typecheck the agent
+        run: npx tsc --noEmit
+        working-directory: eve
+
+      - name: Unit tests
+        run: bun test agent
+        working-directory: eve
+
+      - name: Mint a throwaway service keypair
+        run: node ci/keygen.mjs
+
+      - name: Self-hosted stack
+        run: docker compose -f compose.ci.yaml --env-file ci/selfhosted.env up --build --wait
+
+      - name: Self-hosted checks
+        run: bun test test/
+        env:
+          STACK: selfhosted
+          AGENT_ENV_FILE: ci/selfhosted.env
+
+      - name: Self-hosted logs
+        if: failure()
+        run: docker compose -f compose.ci.yaml --env-file ci/selfhosted.env logs --tail 400
+
+      - name: Tear the self-hosted stack down
+        run: docker compose -f compose.ci.yaml --env-file ci/selfhosted.env down -v
+
+      - name: Hosted stack
+        run: docker compose -f compose.ci.yaml --env-file ci/hosted.env up --build --wait
+
+      - name: Hosted checks
+        run: bun test test/
+        env:
+          STACK: hosted
+          AGENT_ENV_FILE: ci/hosted.env
+
+      - name: Hosted logs
+        if: failure()
+        run: docker compose -f compose.ci.yaml --env-file ci/hosted.env logs --tail 400
+
+      - name: Tear the hosted stack down
+        if: always()
+        run: docker compose -f compose.ci.yaml --env-file ci/hosted.env down -v
