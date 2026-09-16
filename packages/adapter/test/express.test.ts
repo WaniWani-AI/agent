@@ -8,6 +8,9 @@ const ORIGIN = "https://shop.example";
 /** Nothing listens here: every assertion below settles before the runtime is reached. */
 const UNREACHABLE = "http://127.0.0.1:1";
 
+// `/events` forwards to WaniWani, and the default is the production region.
+process.env.WANIWANI_API_URL = UNREACHABLE;
+
 const running: Server[] = [];
 
 async function mount(): Promise<string> {
@@ -109,4 +112,39 @@ test("a client gets sixty requests a minute", async () => {
 	const refused = await get();
 	expect(refused.status).toBe(429);
 	expect(await refused.json()).toEqual({ error: "rate_limited" });
+});
+
+test("a router without both credentials refuses to exist", () => {
+	const options = {
+		eveUrl: UNREACHABLE,
+		apiKey: "wwk_test",
+		publicKey: PUBLIC_KEY,
+		allowedOrigins: [ORIGIN],
+		title: "Fixture",
+		mcpLoopbackUrl: `${UNREACHABLE}/mcp`,
+	};
+
+	// An empty key would otherwise compare equal to the empty one a request
+	// carrying no key presents.
+	expect(() => agentRouter({ ...options, publicKey: "" })).toThrow();
+	expect(() => agentRouter({ ...options, apiKey: "" })).toThrow();
+});
+
+test("a widget posts from the origin this router serves it on", async () => {
+	const base = await mount();
+	const self = new URL(base).origin;
+
+	const posted = await fetch(`${base}/events`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${PUBLIC_KEY}`,
+			"content-type": "application/json",
+			origin: self,
+		},
+		body: JSON.stringify({ events: [] }),
+	});
+
+	// Past the origin check, and only the unreachable app behind it fails.
+	expect(posted.status).not.toBe(403);
+	expect(posted.status).toBe(502);
 });

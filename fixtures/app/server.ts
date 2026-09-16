@@ -4,6 +4,9 @@ import express from "express";
 
 const PORT = Number(process.env.PORT || 3004);
 const KEY = "Bearer wwk_test";
+/** Ingest takes the environment's browser-safe key, where the config route does not. */
+const INGEST_KEY = "Bearer wwp_test";
+const INGEST_PATH = "/api/mcp/events/v2/batch";
 const PUBLIC_KEY_FILE = process.env.SERVICE_PUBLIC_KEY_FILE;
 
 const BYO = {
@@ -70,6 +73,9 @@ app.get("/_events", (_request, response) => response.json({ events }));
 
 app.use((request, response, next) => {
 	if (request.path.startsWith("/_")) return next();
+	if (request.path === INGEST_PATH && request.headers.authorization === INGEST_KEY) {
+		return next();
+	}
 	if (!authorized(request.headers.authorization)) {
 		return response.status(401).json({ success: false, message: "UNAUTHORIZED" });
 	}

@@ -44,7 +44,10 @@ function publicOrigin(req: Request): URL {
 function matches(presented: string, expected: string): boolean {
 	const actual = Buffer.from(presented);
 	const wanted = Buffer.from(expected);
-	return actual.length === wanted.length && timingSafeEqual(actual, wanted);
+	// Two empty buffers compare equal, and a request carrying no key presents an
+	// empty one, so a router built without a key would accept everything.
+	if (actual.length === 0 || actual.length !== wanted.length) return false;
+	return timingSafeEqual(actual, wanted);
 }
 
 /**
@@ -200,6 +203,9 @@ async function pipe(frames: ReadableStream<Uint8Array>, res: Response): Promise<
  */
 export function agentRouter(options: AgentRouterOptions): Router {
 	const { eveUrl, apiKey, publicKey, allowedOrigins, title, mcpLoopbackUrl } = options;
+	if (!publicKey || !apiKey) {
+		throw new Error("agentRouter needs both the environment key and the public key");
+	}
 	const apiUrl = process.env.WANIWANI_API_URL || "https://app.waniwani.ai";
 	const router = express.Router();
 	const loopback = <T>(
@@ -226,8 +232,13 @@ export function agentRouter(options: AgentRouterOptions): Router {
 			next();
 			return;
 		}
+		// A widget reporting its events was served by `/resource`, so it runs on
+		// this router's own origin, which no other page can put in an `Origin`.
 		const origin = req.get("origin");
-		if (!origin || !allowedOrigins.includes(origin)) {
+		const allowed =
+			origin !== undefined &&
+			(allowedOrigins.includes(origin) || origin === publicOrigin(req).origin);
+		if (!allowed) {
 			res.status(403).json({ error: "forbidden_origin" });
 			return;
 		}

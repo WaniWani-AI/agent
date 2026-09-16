@@ -480,6 +480,24 @@ onSelfHosted("(f) an iframe loads a widget, and a widget calls a tool", async ()
 	// server that authenticates it answers both callers.
 	expect(calls[0]?.authorization).toBe("Bearer wwk_test");
 	expect(calls[0]?.arguments.sessionId).toBe("wrun_widget");
+
+	// A widget posts from the origin this router served it on, and the event
+	// reaches WaniWani under the public key.
+	const reported = await fetch(`${AGENT}/events`, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${PUBLIC_KEY}`,
+			"content-type": "application/json",
+			origin: new URL(AGENT).origin,
+		},
+		body: JSON.stringify({ events: [{ name: "widget.clicked" }] }),
+	});
+	expect(reported.status).toBe(200);
+
+	const { events } = (await (await fetch(`${APP}/_events`)).json()) as {
+		events: unknown[];
+	};
+	expect(JSON.stringify(events)).toContain("widget.clicked");
 }, 60_000);
 
 onSelfHosted("(g) the router refuses a missing key, a foreign origin and a flood", async () => {
