@@ -380,11 +380,13 @@ export function agentRouter(options: AgentRouterOptions): Router {
 						: undefined;
 				if (!tool) return undefined;
 				// A strict schema rejects a property it never declared, so the session
-				// id goes only where the runtime would put it too.
+				// id goes into the arguments only where the runtime would put it, and
+				// into `_meta` either way, which is where instrumentation reads it.
 				const wantsSessionId = sessionId && declaresSessionId(tool.inputSchema);
 				return await mcp.callTool({
 					name: tool.name,
 					arguments: { ...args, ...(wantsSessionId ? { sessionId } : {}) },
+					...(sessionId ? { _meta: { "waniwani/sessionId": sessionId } } : {}),
 				});
 			});
 			if (!result) {

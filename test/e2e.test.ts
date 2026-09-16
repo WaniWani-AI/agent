@@ -489,12 +489,18 @@ onSelfHosted("(f) an iframe loads a widget, and a widget calls a tool", async ()
 	});
 
 	const { calls } = (await (await fetch(`${MCP}/_calls`)).json()) as {
-		calls: Array<{ authorization: string | null; arguments: Record<string, unknown> }>;
+		calls: Array<{
+			authorization: string | null;
+			arguments: Record<string, unknown>;
+			_meta: Record<string, unknown> | null;
+		}>;
 	};
 	// The router forwards the environment key, the way the runtime does, so a
 	// server that authenticates it answers both callers.
 	expect(calls[0]?.authorization).toBe("Bearer wwk_test");
 	expect(calls[0]?.arguments.sessionId).toBe("wrun_widget");
+	// And the conversation the call belongs to, which is what attributes it.
+	expect(calls[0]?._meta?.["waniwani/sessionId"]).toBe("wrun_widget");
 
 	// A widget posts from the origin this router served it on, and the event
 	// reaches WaniWani under the public key.
