@@ -16,11 +16,31 @@ let analytics: ReturnType<typeof waniwani> | undefined;
 /** Model ids arrive on `step.started` and usage on `step.completed`, one step apart. */
 const stepModels = new Map<string, string>();
 
+let warnedMultiTenant = false;
+
+/**
+ * Ingestion resolves the destination environment from the public key, and this
+ * runtime holds exactly one. A hosted runtime serves many environments, so
+ * reporting them all through that key would file every tenant's transcript
+ * under whoever owns it.
+ */
 function enabled(): boolean {
-	return (
-		process.env.WANIWANI_ANALYTICS === "ingest" &&
-		Boolean(process.env.WANIWANI_PUBLIC_KEY)
-	);
+	if (
+		process.env.WANIWANI_ANALYTICS !== "ingest" ||
+		!process.env.WANIWANI_PUBLIC_KEY
+	) {
+		return false;
+	}
+	if (process.env.WANIWANI_SERVICE_PRIVATE_KEY) {
+		if (!warnedMultiTenant) {
+			warnedMultiTenant = true;
+			console.error(
+				"[analytics] disabled: WANIWANI_PUBLIC_KEY names one environment and this runtime serves many",
+			);
+		}
+		return false;
+	}
+	return true;
 }
 
 function turnIdOf(event: StreamEvent): string | undefined {

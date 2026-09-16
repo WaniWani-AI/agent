@@ -389,6 +389,15 @@ describe("assertCallerOwnsSession", () => {
 		).not.toThrow();
 	});
 
+	test("an anonymous caller cannot continue an identified visitor's session", () => {
+		expect(() =>
+			assertCallerOwnsSession({
+				current: principal({ subject: "anonymous", environmentId: "env-1" }),
+				initiator: principal({ subject: "visitor-1", environmentId: "env-1" }),
+			}),
+		).toThrow(/different visitor/);
+	});
+
 	test("an anonymous session survives the visitor identifying mid-conversation", () => {
 		expect(() =>
 			assertCallerOwnsSession({

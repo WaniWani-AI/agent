@@ -59,13 +59,13 @@ export function assertCallerOwnsSession(auth: SessionAuth | undefined): void {
 		);
 	}
 
-	const identified =
-		current.subject &&
-		current.subject !== ANONYMOUS &&
-		initiator.subject &&
-		initiator.subject !== ANONYMOUS;
-	if (identified && current.subject !== initiator.subject) {
-		throw new Error("Session token names a different visitor than the session it addresses");
+	// Asymmetric on purpose: an anonymous session may become identified as the
+	// visitor signs in, but an identified one never reopens to anonymous.
+	const owned = initiator.subject && initiator.subject !== ANONYMOUS;
+	if (owned && current.subject !== initiator.subject) {
+		throw new Error(
+			"Session token names a different visitor than the session it addresses",
+		);
 	}
 }
 

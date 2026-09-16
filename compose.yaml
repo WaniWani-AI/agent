@@ -21,20 +21,38 @@ services:
     build: ./eve
     ports: ["127.0.0.1:${WANIWANI_AGENT_PORT:-3001}:3001"]
     environment:
+      # Required. Fixed by this file; you should not need to touch them.
       PORT: "3001"
       WORKFLOW_POSTGRES_URL: postgres://eve:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/eve
-      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
       WORKFLOW_LOCAL_BASE_URL: http://eve:3001
-      WANIWANI_API_URL: ${WANIWANI_API_URL:-https://app.waniwani.ai}
+
+      # Required. Your identity to WaniWani, and the HMAC secret your backend
+      # signs visitor session tokens with. Both are mounted from ./.secrets.
       WANIWANI_API_KEY_FILE: /run/secrets/api_key
       WANIWANI_AGENT_SECRET_FILE: /run/secrets/agent_secret
-      WANIWANI_MCP_URL: ${WANIWANI_MCP_URL:-}
-      WANIWANI_PUBLIC_KEY: ${WANIWANI_PUBLIC_KEY:-}
-      WANIWANI_ANALYTICS: ${WANIWANI_ANALYTICS:-off}
+
+      # Required for the model the environment publishes. `byo` needs
+      # MODEL_API_KEY unless the payload carries its own key; `managed` needs
+      # AI_GATEWAY_API_KEY. A missing key fails the turn and names the variable.
       MODEL_API_KEY: ${MODEL_API_KEY:-}
       AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
-      AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
+
+      # Optional. WaniWani region URL, when you are not on the US stack.
+      WANIWANI_API_URL: ${WANIWANI_API_URL:-https://app.waniwani.ai}
+      # Optional. Where your MCP server is reachable from inside this network,
+      # when that differs from the URL WaniWani publishes for the environment.
+      WANIWANI_MCP_URL: ${WANIWANI_MCP_URL:-}
+      # Optional. `ingest` reports transcripts to WaniWani, `off` reports
+      # nothing. WANIWANI_PUBLIC_KEY is required when it is on.
+      WANIWANI_ANALYTICS: ${WANIWANI_ANALYTICS:-off}
+      WANIWANI_PUBLIC_KEY: ${WANIWANI_PUBLIC_KEY:-}
+      # Optional. Context window assumed for a model the runtime cannot look up.
       WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS: ${WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS:-32000}
+      # Optional. Points managed inference somewhere other than the AI Gateway.
+      # Leave empty in production.
+      AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
+      # Tuning. Concurrent durable workers.
+      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
     secrets: [api_key, agent_secret]
     healthcheck:
       test:

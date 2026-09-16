@@ -114,24 +114,25 @@ A missing key fails the turn with a message naming the variable. There is no fal
 
 ## Environment
 
-| Variable | Meaning |
-| --- | --- |
-| `PORT` | Port the runtime listens on. Defaults to `3001`. |
-| `WORKFLOW_POSTGRES_URL` | Postgres holding durable session state. Required. |
-| `WORKFLOW_LOCAL_BASE_URL` | How the runtime reaches itself, e.g. `http://eve:3001`. Required. |
-| `WANIWANI_API_URL` | WaniWani region URL. Defaults to `https://app.waniwani.ai`. |
-| `WANIWANI_API_KEY` | The environment key (`wwk_…`). Self-hosted deployments set this. |
-| `WANIWANI_SERVICE_PRIVATE_KEY` | Ed25519 PKCS8 PEM. WaniWani-hosted runtimes set this instead, and serve whichever environment the session token names. |
-| `WANIWANI_REGION` | `us` or `eu`. Required alongside `WANIWANI_SERVICE_PRIVATE_KEY`. |
-| `WANIWANI_AGENT_SECRET` | HMAC secret for the session token. Required. |
-| `WANIWANI_MCP_URL` | Overrides the MCP origin the configuration publishes. |
-| `WANIWANI_ANALYTICS` | `ingest` reports transcripts to WaniWani, `off` reports nothing. Defaults to `off`. |
-| `WANIWANI_PUBLIC_KEY` | Public analytics key. Required when analytics are on. |
-| `MODEL_API_KEY` | Key for your own model, when the payload carries none. |
-| `AI_GATEWAY_API_KEY` | Key for managed inference. Required when the published configuration names a managed model. |
-| `AI_GATEWAY_BASE_URL` | Overrides the gateway endpoint. Leave unset in production. |
-| `WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS` | Context window the runtime assumes. Defaults to `32000`. |
-| `POSTGRES_PASSWORD` | Required by `compose.yaml`. Compose refuses to start without it. |
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `WORKFLOW_POSTGRES_URL` | yes | Postgres holding durable session state. |
+| `WORKFLOW_LOCAL_BASE_URL` | yes | How the runtime reaches itself, e.g. `http://eve:3001`. |
+| `WANIWANI_AGENT_SECRET` | yes | HMAC secret the session token is signed with. |
+| `POSTGRES_PASSWORD` | yes | Read by `compose.yaml`, which refuses to start without it. |
+| `WANIWANI_API_KEY` | one of | The environment key (`wwk_…`). Self-hosted deployments set this. |
+| `WANIWANI_SERVICE_PRIVATE_KEY` | one of | Ed25519 PKCS8 PEM. WaniWani-hosted runtimes set this instead, and serve whichever environment the session token names. |
+| `WANIWANI_REGION` | with the PEM | `us` or `eu`. The audience the service token is minted for. |
+| `MODEL_API_KEY` | for `byo` | Key for your own model, when the payload carries none. |
+| `AI_GATEWAY_API_KEY` | for `managed` | Key for managed inference. |
+| `WANIWANI_PUBLIC_KEY` | with analytics | Public analytics key. |
+| `PORT` | no | Port the runtime listens on. Defaults to `3001`. |
+| `WANIWANI_API_URL` | no | WaniWani region URL. Defaults to `https://app.waniwani.ai`. |
+| `WANIWANI_MCP_URL` | no | Overrides the MCP origin the configuration publishes. |
+| `WANIWANI_ANALYTICS` | no | `ingest` reports transcripts to WaniWani, `off` reports nothing. Defaults to `off`, and is refused outright on a runtime serving more than one environment. |
+| `AI_GATEWAY_BASE_URL` | no | Overrides the gateway endpoint. Leave unset in production. |
+| `WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS` | no | Context window the runtime assumes. Defaults to `32000`. |
+| `WORKFLOW_POSTGRES_WORKER_CONCURRENCY` | no | Concurrent durable workers. Defaults to `5`. |
 
 Every secret above also accepts a `_FILE` variant, which is what `compose.yaml` uses:
 `WANIWANI_API_KEY_FILE=/run/secrets/api_key` reads the value out of the file instead of the
