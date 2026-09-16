@@ -5,7 +5,7 @@ name: waniwani-agent
 # and the runtime uses the URL WaniWani publishes for the environment.
 services:
   postgres:
-    image: postgres:18-bookworm
+    image: postgres:18
     environment:
       POSTGRES_USER: eve
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
