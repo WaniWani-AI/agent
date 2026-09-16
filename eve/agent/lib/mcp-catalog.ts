@@ -10,10 +10,19 @@ export type McpTool = {
 
 export type McpMeta = Record<string, unknown>;
 
-const clients = new Map<string, { endpoint: string; client: Promise<Client> }>();
+/**
+ * Keyed by tenant and endpoint together. A turn holds the `mcpUrl` it snapshotted
+ * for its whole duration, so a republished URL has to open a second client rather
+ * than close the one an older turn is still calling.
+ */
+const clients = new Map<string, Promise<Client>>();
 
 function mcpEndpoint(mcpUrl: string): string {
 	return `${process.env.WANIWANI_MCP_URL || mcpUrl}/mcp`;
+}
+
+function cacheKey(tenantKey: string, endpoint: string): string {
+	return `${tenantKey}\u0000${endpoint}`;
 }
 
 async function connect(endpoint: string): Promise<Client> {
@@ -22,29 +31,26 @@ async function connect(endpoint: string): Promise<Client> {
 	return client;
 }
 
-function clientFor(tenantKey: string, mcpUrl: string): Promise<Client> {
-	const endpoint = mcpEndpoint(mcpUrl);
-	const open = clients.get(tenantKey);
-	if (open?.endpoint === endpoint) {
-		return open.client;
+function clientFor(tenantKey: string, endpoint: string): Promise<Client> {
+	const key = cacheKey(tenantKey, endpoint);
+	const open = clients.get(key);
+	if (open) {
+		return open;
 	}
-	if (open) forget(tenantKey);
 
-	const entry: { endpoint: string; client: Promise<Client> } = {
-		endpoint,
-		client: connect(endpoint).catch((error: unknown) => {
-			if (clients.get(tenantKey) === entry) clients.delete(tenantKey);
-			throw error;
-		}),
-	};
-	clients.set(tenantKey, entry);
-	return entry.client;
+	const client = connect(endpoint).catch((error: unknown) => {
+		if (clients.get(key) === client) clients.delete(key);
+		throw error;
+	});
+	clients.set(key, client);
+	return client;
 }
 
-function forget(tenantKey: string): void {
-	const open = clients.get(tenantKey);
-	clients.delete(tenantKey);
-	void open?.client.then((client) => client.close()).catch(() => {});
+function forget(tenantKey: string, endpoint: string): void {
+	const key = cacheKey(tenantKey, endpoint);
+	const open = clients.get(key);
+	clients.delete(key);
+	void open?.then((client) => client.close()).catch(() => {});
 }
 
 const MAX_TOOL_PAGES = 50;
@@ -53,7 +59,8 @@ export async function listMcpTools(input: {
 	tenantKey: string;
 	mcpUrl: string;
 }): Promise<McpTool[]> {
-	const client = await clientFor(input.tenantKey, input.mcpUrl);
+	const endpoint = mcpEndpoint(input.mcpUrl);
+	const client = await clientFor(input.tenantKey, endpoint);
 	try {
 		const collected: McpTool[] = [];
 		let cursor: string | undefined;
@@ -73,7 +80,7 @@ export async function listMcpTools(input: {
 		}
 		throw new Error(`MCP server paged past ${MAX_TOOL_PAGES} tool pages`);
 	} catch (error) {
-		forget(input.tenantKey);
+		forget(input.tenantKey, endpoint);
 		throw error;
 	}
 }
@@ -86,7 +93,8 @@ export async function callMcpTool(input: {
 	meta: McpMeta;
 	abortSignal: AbortSignal;
 }): Promise<unknown> {
-	const client = await clientFor(input.tenantKey, input.mcpUrl);
+	const endpoint = mcpEndpoint(input.mcpUrl);
+	const client = await clientFor(input.tenantKey, endpoint);
 	const signal = AbortSignal.any([
 		input.abortSignal,
 		AbortSignal.timeout(60_000),
@@ -100,7 +108,7 @@ export async function callMcpTool(input: {
 		.catch((error: unknown) => {
 			// The client is shared by every session on this tenant, so one cancelled
 			// call must not close it out from under the others.
-			if (!signal.aborted) forget(input.tenantKey);
+			if (!signal.aborted) forget(input.tenantKey, endpoint);
 			throw error;
 		});
 
