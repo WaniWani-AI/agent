@@ -110,12 +110,14 @@ async function readStream(
 async function startSession(
 	message: string,
 	token: string,
+	headers: Record<string, string> = {},
 ): Promise<{ sessionId: string; events: StreamEvent[] }> {
 	const response = await fetch(`${EVE}/eve/v1/session`, {
 		method: "POST",
 		headers: {
 			authorization: `Bearer ${token}`,
 			"content-type": "application/json",
+			...headers,
 		},
 		body: JSON.stringify({ message }),
 	});
@@ -229,6 +231,25 @@ onSelfHosted("(a) a first turn calls echo with _meta.sessionId and streams to tu
 	// than leaving the model to invent one.
 	expect(calls[0]?.arguments?.sessionId).toBe(sessionId);
 }, 120_000);
+
+onSelfHosted(
+	"(a2) the visitor and context headers reach the MCP server",
+	async () => {
+		await fetch(`${MCP}/_calls`, { method: "DELETE" });
+		const { sessionId } = await startSession("hello", credential(), {
+			"x-waniwani-visitor": "visitor-42",
+			"x-waniwani-extra": JSON.stringify({ plan: "pro" }),
+		});
+
+		const { calls } = (await (await fetch(`${MCP}/_calls`)).json()) as {
+			calls: Array<{ _meta: Record<string, unknown> | null }>;
+		};
+		expect(calls[0]?._meta?.["waniwani/sessionId"]).toBe(sessionId);
+		expect(calls[0]?._meta?.["waniwani/visitorId"]).toBe("visitor-42");
+		expect(calls[0]?._meta?.["waniwani/extra"]).toEqual({ plan: "pro" });
+	},
+	120_000,
+);
 
 onSelfHosted("(b) a republished prompt reaches the next turn", async () => {
 	const token = credential();

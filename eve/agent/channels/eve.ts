@@ -4,16 +4,15 @@ import { extractBearerToken, verifyJwtHmac } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
 import { ANONYMOUS, credentialForm } from "../lib/tenant.js";
 
+type Attributes = Readonly<Record<string, string | readonly string[]>>;
+
 function matches(token: string | null, expected: string): boolean {
 	const actual = Buffer.from(token ?? "");
 	const wanted = Buffer.from(expected);
 	return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-function withExtra(
-	request: Request,
-	attributes: Readonly<Record<string, string | readonly string[]>>,
-): Readonly<Record<string, string | readonly string[]>> {
+function withExtra(request: Request, attributes: Attributes): Attributes {
 	const extra = request.headers.get("x-waniwani-extra");
 	return extra ? { ...attributes, extra } : attributes;
 }
@@ -24,11 +23,8 @@ export default eveChannel({
 			const token = extractBearerToken(request.headers.get("authorization"));
 
 			if (credentialForm() === "self-hosted") {
-				if (!matches(token, process.env.WANIWANI_API_KEY ?? "")) {
-					return null;
-				}
-				const subject =
-					request.headers.get("x-waniwani-visitor") || ANONYMOUS;
+				if (!matches(token, process.env.WANIWANI_API_KEY ?? "")) return null;
+				const subject = request.headers.get("x-waniwani-visitor") || ANONYMOUS;
 				return {
 					attributes: withExtra(request, {}),
 					authenticator: "waniwani-environment-key",
@@ -39,18 +35,15 @@ export default eveChannel({
 				};
 			}
 
-			const result = await verifyJwtHmac(token, {
+			const verified = await verifyJwtHmac(token, {
 				algorithm: "HS256",
 				audiences: ["waniwani-agent-runtime"],
 				issuer: "waniwani:agent",
 				secret: process.env.WANIWANI_AGENT_SECRET ?? "",
 			});
-			return result.ok
-				? {
-						...result.sessionAuth,
-						attributes: withExtra(request, result.sessionAuth.attributes),
-					}
-				: null;
+			if (!verified.ok) return null;
+			const { sessionAuth } = verified;
+			return { ...sessionAuth, attributes: withExtra(request, sessionAuth.attributes) };
 		},
 	],
 });

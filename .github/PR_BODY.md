@@ -96,8 +96,8 @@ New in this repo: `eve/agent/lib/tenant.ts` (credential form, tenant resolution,
 
 ## 🚨 Over the line budget
 
-`eve/agent` is 1072 lines of source against a target of about 700, so past the stop-and-report
-threshold of 1050. `fixtures/` is 275 against about 300. Roughly where the extra went: about 190
+`eve/agent` is 1065 lines of source against a target of about 700, so past the stop-and-report
+threshold of 1050. `fixtures/` is 266 against about 300, and each fixture is inside its own cap (mcp 95/120, app 96/100, model 75/80). Roughly where the extra went: about 190
 lines in three modules the rewritten contract asks for and the branch had no equivalent of
 (`tenant.ts`, `model.ts`, `turn-snapshot.ts`), and about 90 in hardening that eight review rounds
 turned up (session ownership, the snapshot rebuild after a restart, tool-list pagination,
@@ -111,11 +111,11 @@ I would rather report the overage than compress readable code to hit it.
 $ node ci/keygen.mjs
 $ docker compose -f compose.ci.yaml --env-file ci/selfhosted.env up --build --wait
 $ STACK=selfhosted AGENT_ENV_FILE=ci/selfhosted.env bun test test/
- 4 pass | 1 skip | 0 fail          Ran 5 tests across 1 file. [76.30s]
+ 5 pass | 1 skip | 0 fail          Ran 6 tests across 1 file. [76.73s]
 
 $ docker compose -f compose.ci.yaml --env-file ci/hosted.env up --build --wait
 $ STACK=hosted AGENT_ENV_FILE=ci/hosted.env bun test test/
- 1 pass | 4 skip | 0 fail          Ran 5 tests across 1 file. [2.83s]
+ 1 pass | 5 skip | 0 fail          Ran 6 tests across 1 file. [2.83s]
 ```
 
 One session, end to end, with the fixture MCP server recording what it received:

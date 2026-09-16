@@ -3,13 +3,23 @@ import express from "express";
 const PORT = Number(process.env.PORT || 3003);
 
 type Seen = { authorization: string | null; system: string; tools: string[] };
+type Body = {
+	model?: string;
+	messages?: Array<{ role: string; content: unknown }>;
+	tools?: Array<{ function?: { name?: string } }>;
+};
 
 const seen: Seen[] = [];
 const state = { delayMs: 0 };
 
-function frame(id: string, model: string, choice: unknown): string {
+const ECHO = { name: "echo", arguments: '{"text":"hello"}' };
+const ECHO_CALL = {
+	tool_calls: [{ index: 0, type: "function", id: "call_1", function: ECHO }],
+};
+
+function frame(model: string, choice: unknown): string {
 	return `data: ${JSON.stringify({
-		id,
+		id: "chatcmpl-fixture",
 		object: "chat.completion.chunk",
 		created: Math.floor(Date.now() / 1000),
 		model,
@@ -24,7 +34,6 @@ app.post("/_control", (request, response) => {
 	Object.assign(state, request.body);
 	response.json(state);
 });
-
 app.get("/_seen", (_request, response) => response.json({ seen }));
 app.delete("/_seen", (_request, response) => {
 	seen.length = 0;
@@ -35,12 +44,10 @@ app.post("/v1/chat/completions", async (request, response) => {
 	if (state.delayMs > 0) {
 		await new Promise((resolve) => setTimeout(resolve, state.delayMs));
 	}
-	const body = request.body as {
-		model?: string;
-		messages?: Array<{ role: string; content: unknown }>;
-		tools?: Array<{ function?: { name?: string } }>;
-	};
+	const body = request.body as Body;
 	const messages = body.messages ?? [];
+	const model = body.model ?? "fixture/model";
+
 	seen.push({
 		authorization: request.headers.authorization ?? null,
 		system: messages
@@ -51,32 +58,16 @@ app.post("/v1/chat/completions", async (request, response) => {
 			tool.function?.name ? [tool.function.name] : [],
 		),
 	});
-
-	const model = body.model ?? "fixture/model";
-	const id = `chatcmpl-${seen.length}`;
-	response.setHeader("content-type", "text/event-stream");
-	response.setHeader("cache-control", "no-cache");
+	response.set({ "content-type": "text/event-stream", "cache-control": "no-cache" });
 	response.flushHeaders();
-	response.write(
-		frame(id, model, { delta: { role: "assistant", content: "" }, finish_reason: null }),
-	);
+	response.write(frame(model, { delta: { role: "assistant", content: "" } }));
 
+	// A turn calls `echo` first, then answers off its result.
 	const answering = messages.some((message) => message.role === "tool");
-	const delta = answering
-		? { content: "the fixture answered" }
-		: {
-				tool_calls: [
-					{
-						index: 0,
-						id: `call_${seen.length}`,
-						type: "function",
-						function: { name: "echo", arguments: '{"text":"hello"}' },
-					},
-				],
-			};
-	response.write(frame(id, model, { delta, finish_reason: null }));
+	const delta = answering ? { content: "the fixture answered" } : ECHO_CALL;
+	response.write(frame(model, { delta }));
 	response.write(
-		frame(id, model, { delta: {}, finish_reason: answering ? "stop" : "tool_calls" }),
+		frame(model, { delta: {}, finish_reason: answering ? "stop" : "tool_calls" }),
 	);
 	response.end("data: [DONE]\n\n");
 });
