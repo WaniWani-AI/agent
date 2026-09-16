@@ -10,6 +10,12 @@ const ENV_FILE = process.env.AGENT_ENV_FILE ?? "ci/selfhosted.env";
 const HOSTED = process.env.STACK === "hosted";
 const ENVIRONMENT_ID = "11111111-1111-4111-8111-111111111111";
 
+/** The adapter's router, mounted inside the MCP fixture as the template mounts it. */
+const AGENT = `${MCP}/agent/v1`;
+const PUBLIC_KEY = process.env.WANIWANI_PUBLIC_KEY ?? "wwp_test";
+const ORIGIN = process.env.WANIWANI_ALLOWED_ORIGINS ?? "http://localhost:5173";
+const WIDGET_URI = "ui://views/ext-apps/echo.html";
+
 // Reached from inside the compose network, not from the test's own host ports.
 const BYO_MODEL = {
 	mode: "byo",
@@ -199,11 +205,90 @@ function expectCompleted(events: StreamEvent[]): void {
 	}
 }
 
-async function seenByModel(): Promise<
-	Array<{ authorization: string | null; system: string; tools: string[] }>
-> {
+type ModelRequest = {
+	authorization: string | null;
+	system: string;
+	tools: string[];
+	answering: boolean;
+	finishedAt: number | null;
+};
+
+async function seenByModel(): Promise<ModelRequest[]> {
 	const response = await fetch(`${MODEL}/_seen`);
-	return ((await response.json()) as { seen: [] }).seen;
+	return ((await response.json()) as { seen: ModelRequest[] }).seen;
+}
+
+async function modelControl(patch: Record<string, unknown>): Promise<void> {
+	const response = await fetch(`${MODEL}/_control`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(patch),
+	});
+	expect(response.ok).toBe(true);
+}
+
+/** A fresh process, and with it a fresh rate-limit window. */
+async function restartMcp(): Promise<void> {
+	const proc = Bun.spawn([
+		"docker",
+		"compose",
+		"-f",
+		"compose.ci.yaml",
+		"--env-file",
+		ENV_FILE,
+		"restart",
+		"mcp",
+	]);
+	expect(await proc.exited).toBe(0);
+	for (let attempt = 0; attempt < 60; attempt += 1) {
+		// `/_calls` sits outside the router, so polling it costs no request budget.
+		const ready = await fetch(`${MCP}/_calls`).catch(() => null);
+		if (ready?.ok) return;
+		await Bun.sleep(500);
+	}
+	throw new Error("the MCP fixture did not come back");
+}
+
+function browserPost(body: unknown, headers: Record<string, string> = {}): Promise<Response> {
+	return fetch(AGENT, {
+		method: "POST",
+		headers: {
+			authorization: `Bearer ${PUBLIC_KEY}`,
+			"content-type": "application/json",
+			origin: ORIGIN,
+			...headers,
+		},
+		body: JSON.stringify(body),
+	});
+}
+
+function userMessage(text: string): unknown {
+	return { messages: [{ role: "user", parts: [{ type: "text", text }] }] };
+}
+
+/** The UI message stream the SDK's embed reads, one parsed chunk at a time. */
+async function* uiChunks(response: Response): AsyncGenerator<Record<string, unknown>> {
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("the turn returned no body");
+	const decoder = new TextDecoder();
+	let buffer = "";
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) return;
+			buffer += decoder.decode(value, { stream: true });
+			let boundary = buffer.indexOf("\n\n");
+			while (boundary !== -1) {
+				const data = buffer.slice(0, boundary).trim().replace(/^data: /, "");
+				buffer = buffer.slice(boundary + 2);
+				if (data === "[DONE]") return;
+				if (data) yield JSON.parse(data) as Record<string, unknown>;
+				boundary = buffer.indexOf("\n\n");
+			}
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
 }
 
 const onSelfHosted = test.skipIf(HOSTED);
@@ -215,7 +300,7 @@ beforeAll(async () => {
 		model: HOSTED ? { mode: "managed", modelId: "openai/test" } : BYO_MODEL,
 		instructions: "You are a fixture assistant. Always call the echo tool first.",
 	});
-	// Cold, so the first turn reads the state this run set rather than the last one's.
+	// Cold, so the first turn reads the state this run set.
 	await restartEve();
 }, 240_000);
 
@@ -294,6 +379,96 @@ onSelfHosted("(c) a session answers again after the runtime restarts", async () 
 	const events = await sendTurn(sessionId, "still there?", token);
 	expectCompleted(events);
 }, 240_000);
+
+onSelfHosted("(e) the router streams a turn as the model writes it", async () => {
+	await fetch(`${MODEL}/_seen`, { method: "DELETE" });
+	// Holds the answering response open after its content delta, so the
+	// assertion below catches the first chunk in flight.
+	await modelControl({ tailDelayMs: 3_000 });
+
+	try {
+		const response = await browserPost(userMessage("hello"));
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toContain("text/event-stream");
+		expect(response.headers.get("x-vercel-ai-ui-message-stream")).toBe("v1");
+		expect(response.headers.get("x-session-id")).toMatch(/^wrun_/);
+
+		const chunks: Array<Record<string, unknown>> = [];
+		let modelStillWriting: boolean | undefined;
+		for await (const chunk of uiChunks(response)) {
+			chunks.push(chunk);
+			if (chunk.type === "text-delta" && modelStillWriting === undefined) {
+				modelStillWriting = (await seenByModel()).some(
+					(seen) => seen.answering && seen.finishedAt === null,
+				);
+			}
+		}
+
+		expect(modelStillWriting).toBe(true);
+
+		const text = chunks.filter((chunk) => chunk.type === "text-delta");
+		expect(text.length).toBeGreaterThan(0);
+		expect(text.map((chunk) => chunk.delta).join("")).toBe("the fixture answered");
+
+		const output = chunks.find((chunk) => chunk.type === "tool-output-available") as
+			| { toolCallId: string; output: { content: Array<{ text: string }> } }
+			| undefined;
+		expect(output?.toolCallId).toBe("call_1");
+		expect(output?.output.content[0]?.text).toBe("echo: hello");
+		expect(chunks.find((chunk) => chunk.type === "tool-input-available")).toMatchObject({
+			toolName: "echo",
+			input: { text: "hello" },
+		});
+
+		const steps = chunks.filter((chunk) => chunk.type === "message-metadata") as Array<{
+			messageMetadata: { "waniwani/step": { modelId?: string; usage?: unknown } };
+		}>;
+		expect(steps).toHaveLength(2);
+		for (const step of steps) {
+			expect(step.messageMetadata["waniwani/step"].modelId).toBe("openai/fixture/model");
+			expect(step.messageMetadata["waniwani/step"].usage).toMatchObject({
+				inputTokens: 11,
+				outputTokens: 7,
+			});
+		}
+
+		expect(chunks.at(-1)).toEqual({ type: "finish", finishReason: "stop" });
+	} finally {
+		await modelControl({ tailDelayMs: 0 });
+	}
+}, 180_000);
+
+onSelfHosted("(f) an iframe loads a widget with the key in the query", async () => {
+	const response = await fetch(
+		`${AGENT}/resource?uri=${encodeURIComponent(WIDGET_URI)}&token=${PUBLIC_KEY}`,
+	);
+
+	expect(response.status).toBe(200);
+	expect(response.headers.get("content-type")).toContain("text/html");
+	const html = await response.text();
+	expect(html).toContain('<div id="echo"></div>');
+	expect(html.toLowerCase()).toStartWith("<!doctype html>");
+}, 60_000);
+
+onSelfHosted("(g) the router refuses a missing key, a foreign origin and a flood", async () => {
+	expect((await fetch(`${AGENT}/config`)).status).toBe(401);
+	expect(
+		(await browserPost(userMessage("hello"), { origin: "https://attacker.example" })).status,
+	).toBe(403);
+
+	await restartMcp();
+	for (let request = 1; request <= 60; request += 1) {
+		const response = await fetch(`${AGENT}/config`, {
+			headers: { authorization: `Bearer ${PUBLIC_KEY}` },
+		});
+		expect(response.status).toBe(200);
+	}
+	const flooded = await fetch(`${AGENT}/config`, {
+		headers: { authorization: `Bearer ${PUBLIC_KEY}` },
+	});
+	expect(flooded.status).toBe(429);
+	expect(await flooded.json()).toEqual({ error: "rate_limited" });
+}, 120_000);
 
 onSelfHosted("(d) an outage keeps warm sessions answering and fails a cold one loudly", async () => {
 	const token = credential();

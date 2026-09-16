@@ -16,15 +16,22 @@ services:
       retries: 30
 
   mcp:
-    build: ./fixtures
-    command: bun run mcp/server.ts
+    build: { context: ., dockerfile: fixtures/Dockerfile }
+    command: bun run fixtures/mcp/server.ts
     environment:
       PORT: "3002"
+      WANIWANI_API_URL: http://app:3004
+      # Set only in the self-hosted shape, where the router holds the
+      # environment key. This is the env gate the template uses.
+      WANIWANI_AGENT_EVE_URL: ${WANIWANI_AGENT_EVE_URL:-}
+      WANIWANI_API_KEY: ${WANIWANI_API_KEY:-}
+      WANIWANI_PUBLIC_KEY: ${WANIWANI_PUBLIC_KEY:-}
+      WANIWANI_ALLOWED_ORIGINS: ${WANIWANI_ALLOWED_ORIGINS:-}
     ports: ["127.0.0.1:3002:3002"]
 
   app:
-    build: ./fixtures
-    command: bun run app/server.ts
+    build: { context: ., dockerfile: fixtures/Dockerfile }
+    command: bun run fixtures/app/server.ts
     environment:
       PORT: "3004"
       FIXTURE_MCP_URL: http://mcp:3002
@@ -35,8 +42,8 @@ services:
     ports: ["127.0.0.1:3004:3004"]
 
   model:
-    build: ./fixtures
-    command: bun run model/server.ts
+    build: { context: ., dockerfile: fixtures/Dockerfile }
+    command: bun run fixtures/model/server.ts
     environment:
       PORT: "3003"
     ports: ["127.0.0.1:3003:3003"]

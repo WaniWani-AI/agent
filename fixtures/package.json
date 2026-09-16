@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
-    "express": "5.2.1"
+    "cors": "2.8.5",
+    "express": "5.2.1",
+    "jose": "6.1.0"
   }
 }

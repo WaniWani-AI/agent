@@ -20,7 +20,9 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: eve/package-lock.json
+          cache-dependency-path: |
+            eve/package-lock.json
+            packages/adapter/package-lock.json
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -38,6 +40,26 @@ jobs:
         run: bun test agent
         working-directory: eve
 
+      - name: Install the adapter's dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: packages/adapter
+
+      - name: Typecheck the adapter
+        run: npx tsc --noEmit
+        working-directory: packages/adapter
+
+      - name: Adapter unit tests
+        run: bun test test
+        working-directory: packages/adapter
+
+      - name: Build the adapter
+        run: npm run build
+        working-directory: packages/adapter
+
+      - name: Adapter package contents
+        run: npm pack --dry-run
+        working-directory: packages/adapter
+
       - name: Mint a throwaway service keypair
         run: node ci/keygen.mjs
 
@@ -45,7 +67,7 @@ jobs:
         run: docker compose -f compose.ci.yaml --env-file ci/selfhosted.env up --build --wait
 
       - name: Self-hosted checks
-        run: bun test test/
+        run: bun test test/e2e.test.ts
         env:
           STACK: selfhosted
           AGENT_ENV_FILE: ci/selfhosted.env
@@ -61,7 +83,7 @@ jobs:
         run: docker compose -f compose.ci.yaml --env-file ci/hosted.env up --build --wait
 
       - name: Hosted checks
-        run: bun test test/
+        run: bun test test/e2e.test.ts
         env:
           STACK: hosted
           AGENT_ENV_FILE: ci/hosted.env
