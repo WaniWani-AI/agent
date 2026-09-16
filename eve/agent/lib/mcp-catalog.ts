@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { JsonObject } from "./json.js";
+import { mcpEndpointFor } from "./mcp-endpoint.js";
 import { credentialForm } from "./tenant.js";
 import { textOf } from "./tool-output.js";
 
@@ -18,10 +19,6 @@ export type McpMeta = Record<string, unknown>;
  * than close the one an older turn is still calling.
  */
 const clients = new Map<string, Promise<Client>>();
-
-function mcpEndpoint(mcpUrl: string): string {
-	return `${process.env.WANIWANI_MCP_URL || mcpUrl}/mcp`;
-}
 
 function cacheKey(tenantKey: string, endpoint: string): string {
 	return `${tenantKey}\u0000${endpoint}`;
@@ -77,7 +74,7 @@ export async function listMcpTools(input: {
 	tenantKey: string;
 	mcpUrl: string;
 }): Promise<McpTool[]> {
-	const endpoint = mcpEndpoint(input.mcpUrl);
+	const endpoint = mcpEndpointFor(input.mcpUrl);
 	const client = await clientFor(input.tenantKey, endpoint);
 	try {
 		const collected: McpTool[] = [];
@@ -111,7 +108,7 @@ export async function callMcpTool(input: {
 	meta: McpMeta;
 	abortSignal: AbortSignal;
 }): Promise<unknown> {
-	const endpoint = mcpEndpoint(input.mcpUrl);
+	const endpoint = mcpEndpointFor(input.mcpUrl);
 	const client = await clientFor(input.tenantKey, endpoint);
 	const signal = AbortSignal.any([
 		input.abortSignal,
