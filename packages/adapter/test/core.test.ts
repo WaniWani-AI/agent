@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { jwtVerify } from "jose";
-import { encodeSse, mintSessionToken } from "../src/core.js";
+import { encodeSse, mintSessionToken, runTurn } from "../src/core.js";
 import type { UIMessageChunk } from "../src/ui-stream.js";
 
 const SECRET = "ci-agent-secret";
@@ -87,4 +87,40 @@ test("turns a transport failure into an error chunk and still terminates", async
 	expect(frames[1]).toBe('data: {"type":"error","errorText":"stream disconnected"}');
 	expect(frames[2]).toBe('data: {"type":"finish","finishReason":"error"}');
 	expect(frames[3]).toBe("data: [DONE]");
+});
+
+test("a stream that stops mid-turn reaches the browser as a failure", async () => {
+	// A turn that streams one delta and then ends its body with no boundary
+	// behind it, which is what a proxy closing a connection looks like.
+	const runtime = Bun.serve({
+		port: 0,
+		fetch(request) {
+			if (new URL(request.url).pathname === "/eve/v1/session") {
+				return Response.json({ ok: true, sessionId: "wrun_partial" });
+			}
+			return new Response(
+				'{"type":"message.appended","data":{"messageDelta":"half an "}}\n',
+				{ headers: { "content-type": "application/x-ndjson" } },
+			);
+		},
+	});
+
+	try {
+		const turn = await runTurn({
+			eveUrl: `http://127.0.0.1:${runtime.port}`,
+			credential: "wwk_test",
+			message: "hello",
+		});
+		expect(turn.sessionId).toBe("wrun_partial");
+
+		const frames = (await new Response(encodeSse(turn.chunks)).text())
+			.split("\n\n")
+			.filter(Boolean);
+		expect(frames.some((frame) => frame.includes('"delta":"half an "'))).toBe(true);
+		expect(frames.some((frame) => frame.includes('"type":"error"'))).toBe(true);
+		expect(frames.at(-2)).toBe('data: {"type":"finish","finishReason":"error"}');
+		expect(frames.at(-1)).toBe("data: [DONE]");
+	} finally {
+		runtime.stop(true);
+	}
 });

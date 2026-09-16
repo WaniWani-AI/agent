@@ -127,9 +127,9 @@ export async function createEveSession(
 }
 
 /**
- * Adds a turn to a session and answers the stream index its first event lands
- * on. The runtime answers 409 until the previous turn parks, and that turn
- * keeps appending while it runs, so the tail is re-read before every attempt.
+ * Adds a turn to a session and answers the index its first event lands on. A
+ * mid-turn message steers the running turn, so a 409 means a session that takes
+ * no turn at all, and that turn appends while we ask, hence the tail re-read.
  */
 export async function continueEveSession(
 	target: EveTarget,
@@ -222,9 +222,19 @@ function ndjson(body: ReadableStream<Uint8Array>): ReadableStream<EveEvent> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
+	let ended = false;
 
 	return new ReadableStream<EveEvent>({
 		async pull(controller) {
+			const emit = async (line: string): Promise<void> => {
+				const event = JSON.parse(line) as EveEvent;
+				controller.enqueue(event);
+				if (!TURN_BOUNDARY.has(event.type)) return;
+				ended = true;
+				await reader.cancel().catch(() => {});
+				controller.close();
+			};
+
 			for (;;) {
 				const newline = buffer.indexOf("\n");
 				if (newline === -1) {
@@ -235,20 +245,23 @@ function ndjson(body: ReadableStream<Uint8Array>): ReadableStream<EveEvent> {
 					}
 					const tail = buffer.trim();
 					buffer = "";
-					if (tail) controller.enqueue(JSON.parse(tail) as EveEvent);
-					else controller.close();
+					if (tail) await emit(tail);
+					else if (ended) controller.close();
+					// A body that stops before the turn does leaves a half-written
+					// answer, which the browser would otherwise render as the whole of
+					// one.
+					else {
+						controller.error(
+							new EveError(0, "The session stream ended before the turn did"),
+						);
+					}
 					return;
 				}
 
 				const line = buffer.slice(0, newline).trim();
 				buffer = buffer.slice(newline + 1);
 				if (!line) continue;
-				const event = JSON.parse(line) as EveEvent;
-				controller.enqueue(event);
-				if (TURN_BOUNDARY.has(event.type)) {
-					await reader.cancel().catch(() => {});
-					controller.close();
-				}
+				await emit(line);
 				return;
 			}
 		},
