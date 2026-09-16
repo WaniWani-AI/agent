@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { JsonObject } from "./json.js";
+import { textOf } from "./tool-output.js";
 
 export type McpTool = {
 	name: string;
@@ -116,19 +117,4 @@ export async function callMcpTool(input: {
 		throw new Error(textOf(result) || `Tool ${input.name} failed`);
 	}
 	return result;
-}
-
-export function textOf(result: unknown): string {
-	const content = (result as { content?: unknown }).content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter(
-			(part: unknown): part is { type: "text"; text: string } =>
-				typeof part === "object" &&
-				part !== null &&
-				(part as { type?: unknown }).type === "text" &&
-				typeof (part as { text?: unknown }).text === "string",
-		)
-		.map((part) => part.text)
-		.join("\n");
 }

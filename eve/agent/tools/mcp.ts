@@ -1,6 +1,7 @@
 import { defineDynamic, defineTool } from "eve/tools";
 import type { JsonObject } from "../lib/json.js";
-import { callMcpTool, type McpMeta, textOf } from "../lib/mcp-catalog.js";
+import { callMcpTool, type McpMeta } from "../lib/mcp-catalog.js";
+import { toolModelOutput } from "../lib/tool-output.js";
 import { ANONYMOUS, resolveChannel, tenantOf } from "../lib/tenant.js";
 import { snapshotFor } from "../lib/turn-snapshot.js";
 import type { SessionChannel } from "../lib/session-config.js";
@@ -117,11 +118,7 @@ export default defineDynamic({
 									meta,
 									abortSignal: toolCtx.abortSignal,
 								}),
-							// The durable result keeps `_meta` for the adapter; the model sees text.
-							toModelOutput: (output: unknown) => ({
-								type: "text" as const,
-								value: textOf(output),
-							}),
+							toModelOutput: (output: unknown) => toolModelOutput(output),
 						}),
 					];
 				}),

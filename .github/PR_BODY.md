@@ -82,17 +82,17 @@ differs from the session's creator fails there.
 | `eve/agent/lib/published.ts` | The three module variables became one `Map` keyed by tenant. `publishedFresh` is gone, because revalidation is now always off the turn path. A cold failure shares the one-minute floor and reports its last error. |
 | `eve/agent/lib/session-config.ts` | The new payload shape (`environmentId`, `mcpUrl`, `webSearch`, `channels[]`). The credential fetch, its cache and `configVersion` are deleted. `baseUrl` is required for `byo` only. |
 | `eve/agent/lib/mcp-catalog.ts` | The adapter URL and the service token are gone. One MCP client per tenant, dialled with `StreamableHTTPClientTransport`, dropped and redialled when a call fails or the published `mcpUrl` moves. |
-| `eve/agent/tools/mcp.ts` | Calls `callTool({ name, arguments, _meta })` directly. `toModelOutput` keeps `_meta` out of the model's view while the durable result holds it for PR 4. |
+| `eve/agent/tools/mcp.ts` | Calls `callTool({ name, arguments, _meta })` directly, injects the runtime session id for a server that declares one, and projects the result through `toolModelOutput` so `_meta` never reaches the model while the durable result keeps it for PR 4. |
 | `eve/agent/lib/json.ts` | Unchanged. |
 | `eve/agent/lib/published.test.ts` | Moved and rewritten for the map. Every case that still applied survived; the credential cases went with the credential. |
 | `compose.yaml` | Two services rather than three, since the MCP server is no longer built here. Publishes eve on loopback. |
 | `docs/self-hosted-agent.md` | "How configuration reaches a turn" and "Environment" rewritten to this contract. The demo cookie section and the `/agent/v1` route table are gone; PR 4 owns those. |
 
-New in this repo: `eve/agent/lib/tenant.ts` (credential form, tenant resolution, channel resolution and the Ed25519 service-token signer), `eve/agent/lib/model.ts` (the model rule as a pure function), `eve/agent/lib/turn-snapshot.ts`, `eve/tsconfig.json`, `fixtures/**`, `compose.ci.yaml`, `ci/**`, `test/e2e.test.ts`, `.github/workflows/ci.yml`, `README.md`, `.env.example`.
+New in this repo: `eve/agent/lib/tenant.ts` (credential form, tenant resolution, channel resolution and the Ed25519 service-token signer), `eve/agent/lib/model.ts` (the model rule as a pure function), `eve/agent/lib/turn-snapshot.ts`, `eve/agent/lib/tool-output.ts` (the model-facing projection, pure and unit-tested), `eve/tsconfig.json`, `fixtures/**`, `compose.ci.yaml`, `ci/**`, `test/e2e.test.ts`, `.github/workflows/ci.yml`, `README.md`, `.env.example`.
 
 ## 🚨 Over the line budget
 
-`eve/agent` is 1065 lines of source against a target of about 700, so past the stop-and-report
+`eve/agent` is 1095 lines of source against a target of about 700, so past the stop-and-report
 threshold of 1050. `fixtures/` is 266 against about 300, and each fixture is inside its own cap (mcp 95/120, app 96/100, model 75/80). Roughly where the extra went: about 190
 lines in three modules the rewritten contract asks for and the branch had no equivalent of
 (`tenant.ts`, `model.ts`, `turn-snapshot.ts`), and about 90 in hardening that eight review rounds
@@ -140,7 +140,7 @@ $ curl -s http://127.0.0.1:3002/_calls
 
 ```
 npx tsc --noEmit (eve)     clean
-bun test agent (eve)       36 pass | 0 fail
+bun test agent (eve)       43 pass | 0 fail
 bun test test/             5 pass | 0 fail
 docker compose up --wait   postgres, mcp, app, model, eve all healthy
 grep -rn "installation\|wwi_\|agent_token\|/agent/v1" eve/agent
