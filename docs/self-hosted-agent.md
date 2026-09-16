@@ -37,7 +37,9 @@ address reachable from inside your network.
    `api_key` is your identity to WaniWani. `agent_secret` is the HMAC secret your website's
    backend signs session tokens with, and the runtime verifies every inbound request against it.
 
-3. Copy `.env.example` to `.env` and fill in `POSTGRES_PASSWORD`.
+3. Copy `.env.example` to `.env` and fill in `POSTGRES_PASSWORD`. Generate it with
+   `openssl rand -hex 32`: compose interpolates it straight into a `postgres://` URL, so a
+   password carrying `#`, `/`, `@` or `:` produces a URL the runtime cannot parse.
 
 4. Start it:
 
