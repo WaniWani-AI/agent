@@ -1,0 +1,7 @@
+node_modules
+.eve
+.output
+.env
+.env.*
+!.env.example
+.DS_Store
