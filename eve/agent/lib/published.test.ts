@@ -42,7 +42,8 @@ mock.module("./mcp-catalog.js", () => ({
 const { publishedNow, revalidatePublished, resetPublished } = await import(
 	"./published.js"
 );
-const { tenantOf, assertCallerOwnsSession } = await import("./tenant.js");
+const { tenantOf, assertCallerOwnsSession, credentialForm, resolveChannel } =
+	await import("./tenant.js");
 
 const ALPHA = { key: "alpha", environmentId: "alpha" };
 const BRAVO = { key: "bravo", environmentId: "bravo" };
@@ -110,12 +111,15 @@ describe("published", () => {
 		process.env.WANIWANI_API_KEY = "wwk_unit";
 		process.env.WANIWANI_SERVICE_PRIVATE_KEY = SERVICE_KEY;
 		process.env.WANIWANI_REGION = "eu";
+		delete process.env.WANIWANI_AGENT_SECRET;
+		delete process.env.WANIWANI_CHANNEL_ID;
 	});
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
 		setSystemTime();
 		delete process.env.WANIWANI_SERVICE_PRIVATE_KEY;
+		delete process.env.WANIWANI_AGENT_SECRET;
 	});
 
 	test("a cold tenant waits for its first pass", async () => {
@@ -263,7 +267,6 @@ describe("published", () => {
 	});
 
 	test("the self tenant sends its environment key and names no environment", async () => {
-		delete process.env.WANIWANI_SERVICE_PRIVATE_KEY;
 		await publishedNow(SELF);
 
 		const call = configCalls()[0];
@@ -282,10 +285,77 @@ describe("published", () => {
 	});
 });
 
-describe("tenantOf", () => {
-	afterEach(() => {
-		delete process.env.WANIWANI_SERVICE_PRIVATE_KEY;
+describe("credentialForm and tenantOf", () => {
+	function auth(attributes: Record<string, string>) {
+		return {
+			current: null,
+			initiator: {
+				attributes,
+				authenticator: "jwt-hmac",
+				principalId: "waniwani:agent:visitor",
+				principalType: "service",
+				subject: "visitor",
+			},
+		};
+	}
+
+	beforeEach(() => {
+		delete process.env.WANIWANI_API_KEY;
+		delete process.env.WANIWANI_AGENT_SECRET;
+		delete process.env.WANIWANI_CHANNEL_ID;
 	});
+
+	test("the environment key alone selects the self-hosted form", () => {
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+		expect(credentialForm()).toBe("self-hosted");
+	});
+
+	test("the agent secret alone selects the hosted form", () => {
+		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		expect(credentialForm()).toBe("hosted");
+	});
+
+	test("both forms configured is refused", () => {
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		expect(() => credentialForm()).toThrow(/exactly one/);
+	});
+
+	test("neither form configured is refused", () => {
+		expect(() => credentialForm()).toThrow(/exactly one/);
+	});
+
+	test("a claimed environment is the tenant key on the hosted form", () => {
+		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		expect(tenantOf(auth({ environmentId: "env-1" }))).toEqual({
+			key: "env-1",
+			environmentId: "env-1",
+		});
+	});
+
+	test("the self-hosted form is always the self tenant", () => {
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+		expect(tenantOf(auth({}))).toEqual({ key: "self" });
+	});
+
+	test("a claimed environment on the self-hosted form fails the turn", () => {
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+		expect(() => tenantOf(auth({ environmentId: "env-1" }))).toThrow(
+			/WANIWANI_API_KEY/,
+		);
+	});
+
+	test("no claimed environment on the hosted form fails the turn", () => {
+		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		expect(() => tenantOf(auth({}))).toThrow(/WANIWANI_AGENT_SECRET/);
+	});
+});
+
+describe("resolveChannel", () => {
+	const channels = [
+		{ id: "chan-1", label: "website" },
+		{ id: "chan-2", label: "widget" },
+	];
 
 	function auth(attributes: Record<string, string>) {
 		return {
@@ -300,27 +370,41 @@ describe("tenantOf", () => {
 		};
 	}
 
-	test("a claimed environment is the tenant key on a hosted runtime", () => {
-		process.env.WANIWANI_SERVICE_PRIVATE_KEY = SERVICE_KEY;
-		expect(tenantOf(auth({ environmentId: "env-1" }))).toEqual({
-			key: "env-1",
-			environmentId: "env-1",
-		});
+	beforeEach(() => {
+		delete process.env.WANIWANI_API_KEY;
+		delete process.env.WANIWANI_AGENT_SECRET;
+		delete process.env.WANIWANI_CHANNEL_ID;
 	});
 
-	test("no claim is the self tenant on a key-holding runtime", () => {
-		expect(tenantOf(auth({}))).toEqual({ key: "self" });
+	test("the hosted form takes the channel off the claim", () => {
+		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		expect(
+			resolveChannel({ auth: auth({ channelId: "chan-2" }), channels }),
+		).toEqual({ id: "chan-2", label: "widget" });
 	});
 
-	test("a claimed environment on a key-holding runtime fails the turn", () => {
-		expect(() => tenantOf(auth({ environmentId: "env-1" }))).toThrow(
-			/WANIWANI_API_KEY/,
+	test("a hosted claim falls back to the first channel when absent", () => {
+		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		expect(resolveChannel({ auth: auth({}), channels })).toEqual(channels[0]);
+	});
+
+	test("the self-hosted form takes the configured channel", () => {
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+		process.env.WANIWANI_CHANNEL_ID = "chan-2";
+		expect(resolveChannel({ auth: auth({}), channels })).toEqual(channels[1]);
+	});
+
+	test("an unconfigured self-hosted deployment takes the first channel", () => {
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+		expect(resolveChannel({ auth: auth({}), channels })).toEqual(channels[0]);
+	});
+
+	test("a configured channel the environment never published fails the turn", () => {
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+		process.env.WANIWANI_CHANNEL_ID = "chan-9";
+		expect(() => resolveChannel({ auth: auth({}), channels })).toThrow(
+			/chan-9/,
 		);
-	});
-
-	test("no claim on a hosted runtime fails the turn", () => {
-		process.env.WANIWANI_SERVICE_PRIVATE_KEY = SERVICE_KEY;
-		expect(() => tenantOf(auth({}))).toThrow(/WANIWANI_SERVICE_PRIVATE_KEY/);
 	});
 });
 

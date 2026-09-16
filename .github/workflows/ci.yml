@@ -12,7 +12,7 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -38,16 +38,38 @@ jobs:
         run: bun test agent
         working-directory: eve
 
-      - name: Bring the stack up
-        run: docker compose -f compose.ci.yaml up --build --wait
+      - name: Mint a throwaway service keypair
+        run: node ci/keygen.mjs
 
-      - name: End-to-end tests
+      - name: Self-hosted stack
+        run: docker compose -f compose.ci.yaml --env-file ci/selfhosted.env up --build --wait
+
+      - name: Self-hosted checks
         run: bun test test/
+        env:
+          STACK: selfhosted
+          AGENT_ENV_FILE: ci/selfhosted.env
 
-      - name: Runtime logs
+      - name: Self-hosted logs
         if: failure()
-        run: docker compose -f compose.ci.yaml logs --tail 400
+        run: docker compose -f compose.ci.yaml --env-file ci/selfhosted.env logs --tail 400
 
-      - name: Bring the stack down
+      - name: Tear the self-hosted stack down
+        run: docker compose -f compose.ci.yaml --env-file ci/selfhosted.env down -v
+
+      - name: Hosted stack
+        run: docker compose -f compose.ci.yaml --env-file ci/hosted.env up --build --wait
+
+      - name: Hosted checks
+        run: bun test test/
+        env:
+          STACK: hosted
+          AGENT_ENV_FILE: ci/hosted.env
+
+      - name: Hosted logs
+        if: failure()
+        run: docker compose -f compose.ci.yaml --env-file ci/hosted.env logs --tail 400
+
+      - name: Tear the hosted stack down
         if: always()
-        run: docker compose -f compose.ci.yaml down -v
+        run: docker compose -f compose.ci.yaml --env-file ci/hosted.env down -v

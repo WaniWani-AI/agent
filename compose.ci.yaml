@@ -1,5 +1,7 @@
 name: waniwani-agent-ci
 
+# One stack, two shapes. `--env-file ci/selfhosted.env` runs the customer's own
+# deployment; `--env-file ci/hosted.env` runs the WaniWani-hosted runtime.
 services:
   postgres:
     image: postgres:17-bookworm
@@ -27,6 +29,9 @@ services:
       PORT: "3004"
       FIXTURE_MCP_URL: http://mcp:3002
       FIXTURE_MODEL_URL: http://model:3003/v1
+      FIXTURE_MODEL_MODE: ${FIXTURE_MODEL_MODE:-byo}
+      SERVICE_PUBLIC_KEY_FILE: ${SERVICE_PUBLIC_KEY_FILE:-}
+    volumes: ["./ci/keys:/run/keys:ro"]
     ports: ["127.0.0.1:3004:3004"]
 
   model:
@@ -45,13 +50,17 @@ services:
       WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
       WORKFLOW_LOCAL_BASE_URL: http://eve:3001
       WANIWANI_API_URL: http://app:3004
-      WANIWANI_API_KEY: wwk_test
-      WANIWANI_AGENT_SECRET: ci-agent-secret
+      WANIWANI_API_KEY: ${WANIWANI_API_KEY:-}
+      WANIWANI_AGENT_SECRET: ${WANIWANI_AGENT_SECRET:-}
+      WANIWANI_SERVICE_PRIVATE_KEY_FILE: ${WANIWANI_SERVICE_PRIVATE_KEY_FILE:-}
+      WANIWANI_REGION: ${WANIWANI_REGION:-}
+      WANIWANI_CHANNEL_ID: ${WANIWANI_CHANNEL_ID:-}
       WANIWANI_ANALYTICS: "off"
-      MODEL_API_KEY: byo-test
-      AI_GATEWAY_API_KEY: test
-      AI_GATEWAY_BASE_URL: http://model:3003/v1
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+      AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
       WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS: "32000"
+    volumes: ["./ci/keys:/run/keys:ro"]
     healthcheck:
       test:
         ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/eve/v1/health').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]

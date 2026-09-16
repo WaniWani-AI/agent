@@ -1,7 +1,8 @@
 import { waniwani } from "@waniwani/sdk";
 import { defineHook } from "eve/hooks";
 import type { SessionAuth } from "eve/context";
-import { ANONYMOUS, channelIdOf } from "../lib/tenant.js";
+import { ANONYMOUS, resolveChannel } from "../lib/tenant.js";
+import { heldSnapshot } from "../lib/turn-snapshot.js";
 
 type StreamEvent = {
 	meta: { id: string; at: string };
@@ -48,6 +49,16 @@ function turnIdOf(event: StreamEvent): string | undefined {
 	return typeof turnId === "string" ? turnId : undefined;
 }
 
+function channelIdOf(sessionId: string, auth: SessionAuth): string | undefined {
+	const channels = heldSnapshot(sessionId)?.config.channels;
+	if (!channels) return undefined;
+	try {
+		return resolveChannel({ auth, channels })?.id;
+	} catch {
+		return undefined;
+	}
+}
+
 function visitorIdOf(auth: SessionAuth): string | undefined {
 	const subject = auth.initiator?.subject;
 	return subject && subject !== ANONYMOUS ? subject : undefined;
@@ -80,35 +91,36 @@ async function withDeadline(delivery: Promise<void>): Promise<void> {
 	}
 }
 
-async function send(input: {
-	name: string;
-	event: StreamEvent;
-	sessionId: string;
-	auth: SessionAuth;
-	properties: Record<string, unknown>;
-}): Promise<void> {
+type Ctx = { session: { id: string; auth: SessionAuth } };
+
+async function send(
+	name: string,
+	event: StreamEvent,
+	ctx: Ctx,
+	properties: Record<string, unknown> = {},
+): Promise<void> {
 	const apiKey = process.env.WANIWANI_PUBLIC_KEY;
 	if (!enabled() || !apiKey) {
 		return;
 	}
+	const { id, auth } = ctx.session;
 	try {
 		analytics ??= waniwani({ apiKey, apiUrl: process.env.WANIWANI_API_URL });
-		await withDeadline(deliver({
-			event: input.name,
-			eventId: `eve_${input.event.meta.id}`,
-			timestamp: input.event.meta.at,
-			sessionId: input.sessionId,
-			visitorId: visitorIdOf(input.auth),
-			properties: {
-				...input.properties,
-				channelId: channelIdOf(input.auth),
-			},
-			metadata: { turnId: turnIdOf(input.event) },
-			// The ingestion API takes chat events; the SDK's public union omits them.
-		} as Parameters<typeof analytics.track>[0]));
+		await withDeadline(
+			deliver({
+				event: name,
+				eventId: `eve_${event.meta.id}`,
+				timestamp: event.meta.at,
+				sessionId: id,
+				visitorId: visitorIdOf(auth),
+				properties: { ...properties, channelId: channelIdOf(id, auth) },
+				metadata: { turnId: turnIdOf(event) },
+				// The ingestion API takes chat events; the SDK's public union omits them.
+			} as Parameters<typeof analytics.track>[0]),
+		);
 	} catch (error) {
 		console.error("[analytics] delivery failed", {
-			event: input.name,
+			event: name,
 			message: error instanceof Error ? error.message : "unknown",
 		});
 	}
@@ -116,30 +128,13 @@ async function send(input: {
 
 export default defineHook({
 	events: {
-		"session.started": (event, ctx) =>
-			send({
-				name: "session.started",
-				event,
-				sessionId: ctx.session.id,
-				auth: ctx.session.auth,
-				properties: {},
-			}),
+		"session.started": (event, ctx) => send("session.started", event, ctx),
 		"message.received": (event, ctx) =>
-			send({
-				name: "chat.user_message",
-				event,
-				sessionId: ctx.session.id,
-				auth: ctx.session.auth,
-				properties: { text: event.data.message },
-			}),
+			send("chat.user_message", event, ctx, { text: event.data.message }),
 		"message.completed": (event, ctx) =>
 			event.data.message
-				? send({
-						name: "chat.assistant_message",
-						event,
-						sessionId: ctx.session.id,
-						auth: ctx.session.auth,
-						properties: { text: event.data.message },
+				? send("chat.assistant_message", event, ctx, {
+						text: event.data.message,
 					})
 				: undefined,
 		"action.result": (event, ctx) => {
@@ -147,17 +142,11 @@ export default defineHook({
 			if (result.kind !== "tool-result") {
 				return;
 			}
-			return send({
-				name: "tool.called",
-				event,
-				sessionId: ctx.session.id,
-				auth: ctx.session.auth,
-				properties: {
-					name: result.toolName,
-					output: result.output,
-					isError: result.isError ?? false,
-					callId: result.callId,
-				},
+			return send("tool.called", event, ctx, {
+				name: result.toolName,
+				output: result.output,
+				isError: result.isError ?? false,
+				callId: result.callId,
 			});
 		},
 		"step.started": (event, ctx) => {
@@ -169,31 +158,22 @@ export default defineHook({
 				return;
 			}
 			const modelId = stepModels.get(ctx.session.id);
-			return send({
-				name: "chat.usage",
-				event,
-				sessionId: ctx.session.id,
-				auth: ctx.session.auth,
-				properties: {
-					model: modelId,
-					inputTokens: usage.inputTokens,
-					outputTokens: usage.outputTokens,
-					cachedInputTokens: usage.cacheReadTokens,
-					totalTokens: (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
-					costUsd: usage.costUsd,
-					steps: [{ modelId, ...usage }],
-					granularity: "step",
-				},
+			return send("chat.usage", event, ctx, {
+				model: modelId,
+				inputTokens: usage.inputTokens,
+				outputTokens: usage.outputTokens,
+				cachedInputTokens: usage.cacheReadTokens,
+				totalTokens: (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0),
+				costUsd: usage.costUsd,
+				steps: [{ modelId, ...usage }],
+				granularity: "step",
 			});
 		},
 		"turn.failed": (event, ctx) => {
 			stepModels.delete(ctx.session.id);
-			return send({
-				name: "session.error",
-				event,
-				sessionId: ctx.session.id,
-				auth: ctx.session.auth,
-				properties: { code: "agent_failed", message: event.data.message },
+			return send("session.error", event, ctx, {
+				code: "agent_failed",
+				message: event.data.message,
 			});
 		},
 		"turn.completed": (_event, ctx) => {

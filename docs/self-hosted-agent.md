@@ -20,12 +20,11 @@ address reachable from inside your network.
 
 1. Create an environment key (`wwk_…`) for the environment this deployment serves.
 
-2. Write the two secret files that `compose.yaml` mounts:
+2. Write the secret file that `compose.yaml` mounts:
 
    ```sh
    mkdir -p .secrets
    printf %s 'wwk_...' > .secrets/api_key
-   openssl rand -hex 32 > .secrets/agent_secret
    chmod 600 .secrets/*
    sudo chown 1000:1000 .secrets/*   # linux only
    ```
@@ -34,8 +33,8 @@ address reachable from inside your network.
    and the image runs as UID 1000. A `0600` file owned by anyone else is
    unreadable inside the container and the runtime exits at startup.
 
-   `api_key` is your identity to WaniWani. `agent_secret` is the HMAC secret your website's
-   backend signs session tokens with, and the runtime verifies every inbound request against it.
+   `api_key` is your identity to WaniWani and the credential your backend presents to the
+   runtime. A self-hosted deployment needs nothing else.
 
 3. Copy `.env.example` to `.env` and fill in `POSTGRES_PASSWORD`. Generate it with
    `openssl rand -hex 32`: compose interpolates it straight into a `postgres://` URL, so a
@@ -48,23 +47,37 @@ address reachable from inside your network.
    curl http://127.0.0.1:3001/eve/v1/health
    ```
 
-## The session token
+## The session credential
 
-Every request to the runtime carries `Authorization: Bearer <token>`, an HS256 JWT your backend
-mints per visitor. Nothing else is accepted.
+The runtime accepts exactly one credential form, chosen by which variable is set. Setting both, or
+neither, refuses to start.
+
+**Self-hosted, when `WANIWANI_API_KEY` is set.** Your backend sends that environment key:
+`Authorization: Bearer wwk_…`, compared in constant time. Holding the key Eve holds is the proof,
+and the runtime never calls WaniWani to check it. Two optional headers travel with it:
+
+| Header | Meaning |
+| --- | --- |
+| `x-waniwani-visitor` | The visitor this request belongs to. Defaults to `anonymous`. |
+| `x-waniwani-extra` | JSON context, passed through to your MCP server as `_meta["waniwani/extra"]`. |
+
+Never let the key reach a browser. The visitor header is an assertion by your backend, so the
+runtime trusts it exactly as far as it trusts the key holder.
+
+**WaniWani-hosted, when `WANIWANI_AGENT_SECRET` is set.** One short-lived HS256 JWT per visitor,
+minted server-side.
 
 | Claim | Value |
 | --- | --- |
 | `iss` | `waniwani:agent` |
 | `aud` | `waniwani-agent-runtime` |
 | `sub` | The visitor's id, or the literal `anonymous`. Never empty. |
+| `environmentId` | Required. Which environment this conversation belongs to. |
+| `channelId` | Optional. The channel the conversation is attributed to. |
 | `exp` | At most five minutes out. |
 | `jti` | Unique per token. |
-| `environmentId` | Optional. Only a WaniWani-hosted runtime accepts it. |
-| `channelId` | Optional. The channel the conversation is attributed to. |
-| `extra` | Optional. A JSON object, as a string, passed through to your MCP server. |
 
-A visitor never sees the secret. Mint the token server-side, per page load.
+`x-waniwani-extra` works on this form too. Every custom claim is a string.
 
 ## Who may address a session
 
@@ -120,11 +133,12 @@ A missing key fails the turn with a message naming the variable. There is no fal
 | --- | --- | --- |
 | `WORKFLOW_POSTGRES_URL` | yes | Postgres holding durable session state. |
 | `WORKFLOW_LOCAL_BASE_URL` | yes | How the runtime reaches itself, e.g. `http://eve:3001`. |
-| `WANIWANI_AGENT_SECRET` | yes | HMAC secret the session token is signed with. |
 | `POSTGRES_PASSWORD` | yes | Read by `compose.yaml`, which refuses to start without it. |
-| `WANIWANI_API_KEY` | one of | The environment key (`wwk_…`). Self-hosted deployments set this. |
-| `WANIWANI_SERVICE_PRIVATE_KEY` | one of | Ed25519 PKCS8 PEM. WaniWani-hosted runtimes set this instead, and serve whichever environment the session token names. |
+| `WANIWANI_API_KEY` | one of | The environment key (`wwk_…`). Selects the self-hosted form. |
+| `WANIWANI_AGENT_SECRET` | one of | HMAC secret for the visitor JWT. Selects the WaniWani-hosted form. |
+| `WANIWANI_SERVICE_PRIVATE_KEY` | with the secret | Ed25519 PKCS8 PEM the config fetch signs its service token with. |
 | `WANIWANI_REGION` | with the PEM | `us` or `eu`. The audience the service token is minted for. |
+| `WANIWANI_CHANNEL_ID` | no | Self-hosted only. The channel turns are attributed to. Must be one the environment published, or the turn fails naming it. Defaults to the environment's first channel. |
 | `MODEL_API_KEY` | for `byo` | Key for your own model, when the payload carries none. |
 | `AI_GATEWAY_API_KEY` | for `managed` | Key for managed inference. |
 | `WANIWANI_PUBLIC_KEY` | with analytics | Public analytics key. |

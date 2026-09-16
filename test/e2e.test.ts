@@ -6,6 +6,9 @@ const APP = process.env.APP_URL ?? "http://127.0.0.1:3004";
 const MCP = process.env.MCP_URL ?? "http://127.0.0.1:3002";
 const MODEL = process.env.MODEL_URL ?? "http://127.0.0.1:3003";
 const SECRET = process.env.WANIWANI_AGENT_SECRET ?? "ci-agent-secret";
+const ENV_FILE = process.env.AGENT_ENV_FILE ?? "ci/selfhosted.env";
+const HOSTED = process.env.STACK === "hosted";
+const ENVIRONMENT_ID = "11111111-1111-4111-8111-111111111111";
 
 // Reached from inside the compose network, not from the test's own host ports.
 const BYO_MODEL = {
@@ -23,13 +26,21 @@ function base64url(value: string | Buffer): string {
 	return Buffer.from(value).toString("base64url");
 }
 
-function sessionToken(claims: Record<string, unknown> = {}): string {
+/**
+ * The self-hosted stack proves itself with the environment key it already holds.
+ * The hosted stack takes one short-lived HS256 token per visitor.
+ */
+function credential(claims: Record<string, unknown> = {}): string {
+	if (!HOSTED) {
+		return "wwk_test";
+	}
 	const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
 	const payload = base64url(
 		JSON.stringify({
 			iss: "waniwani:agent",
 			aud: "waniwani-agent-runtime",
 			sub: "anonymous",
+			environmentId: ENVIRONMENT_ID,
 			jti: randomUUID(),
 			exp: Math.floor(Date.now() / 1000) + 120,
 			...claims,
@@ -154,6 +165,8 @@ async function restartEve(): Promise<void> {
 		"compose",
 		"-f",
 		"compose.ci.yaml",
+		"--env-file",
+		ENV_FILE,
 		"restart",
 		"eve",
 	]);
@@ -182,19 +195,22 @@ async function seenByModel(): Promise<
 	return ((await response.json()) as { seen: [] }).seen;
 }
 
+const onSelfHosted = test.skipIf(HOSTED);
+const onHosted = test.skipIf(!HOSTED);
+
 beforeAll(async () => {
 	await control({
 		failing: false,
-		model: BYO_MODEL,
+		model: HOSTED ? { mode: "managed", modelId: "openai/test" } : BYO_MODEL,
 		instructions: "You are a fixture assistant. Always call the echo tool first.",
 	});
 	// Cold, so the first turn reads the state this run set rather than the last one's.
 	await restartEve();
 }, 240_000);
 
-test("(a) a first turn calls echo with _meta.sessionId and streams to turn.completed", async () => {
+onSelfHosted("(a) a first turn calls echo with _meta.sessionId and streams to turn.completed", async () => {
 	await fetch(`${MCP}/_calls`, { method: "DELETE" });
-	const token = sessionToken();
+	const token = credential();
 	const { sessionId, events } = await startSession("hello", token);
 
 	expectCompleted(events);
@@ -214,8 +230,8 @@ test("(a) a first turn calls echo with _meta.sessionId and streams to turn.compl
 	expect(calls[0]?.arguments?.sessionId).toBe(sessionId);
 }, 120_000);
 
-test("(b) a republished prompt reaches the next turn", async () => {
-	const token = sessionToken();
+onSelfHosted("(b) a republished prompt reaches the next turn", async () => {
+	const token = credential();
 	const { sessionId } = await startSession("hello", token);
 
 	await control({
@@ -235,8 +251,8 @@ test("(b) a republished prompt reaches the next turn", async () => {
 	expect(seen[0]?.system).toContain("REPUBLISHED");
 }, 240_000);
 
-test("(c) a session answers again after the runtime restarts", async () => {
-	const token = sessionToken();
+onSelfHosted("(c) a session answers again after the runtime restarts", async () => {
+	const token = credential();
 	const { sessionId } = await startSession("hello", token);
 
 	await restartEve();
@@ -245,8 +261,8 @@ test("(c) a session answers again after the runtime restarts", async () => {
 	expectCompleted(events);
 }, 240_000);
 
-test("(d) an outage keeps warm sessions answering and fails a cold one loudly", async () => {
-	const token = sessionToken();
+onSelfHosted("(d) an outage keeps warm sessions answering and fails a cold one loudly", async () => {
+	const token = credential();
 	const { sessionId } = await startSession("hello", token);
 
 	await control({ failing: true });
@@ -254,7 +270,7 @@ test("(d) an outage keeps warm sessions answering and fails a cold one loudly", 
 	expectCompleted(warm);
 
 	await restartEve();
-	const cold = await startSession("anyone there?", sessionToken());
+	const cold = await startSession("anyone there?", credential());
 	const failure = cold.events.at(-1);
 	expect(failure?.type).toBe("session.failed");
 	expect(JSON.stringify(failure?.data)).toContain(
@@ -268,17 +284,13 @@ test("(d) an outage keeps warm sessions answering and fails a cold one loudly", 
 	await control({ failing: false });
 }, 300_000);
 
-test("(h) a managed model reaches the gateway base URL with the gateway key", async () => {
-	await control({ model: { mode: "managed", modelId: "openai/test" } });
-	await restartEve();
+onHosted("(h) a managed model reaches the gateway base URL with the gateway key", async () => {
 	await fetch(`${MODEL}/_seen`, { method: "DELETE" });
 
-	const started = await startSession("hello", sessionToken());
+	const started = await startSession("hello", credential());
 	expectCompleted(started.events);
 
 	const seen = await seenByModel();
 	expect(seen.length).toBeGreaterThan(0);
 	expect(seen[0]?.authorization).toBe("Bearer test");
-
-	await control({ model: BYO_MODEL });
 }, 300_000);

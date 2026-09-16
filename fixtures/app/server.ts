@@ -1,16 +1,50 @@
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
+import { readFileSync } from "node:fs";
 import express from "express";
 
 const PORT = Number(process.env.PORT || 3004);
 const KEY = "Bearer wwk_test";
+const PUBLIC_KEY_FILE = process.env.SERVICE_PUBLIC_KEY_FILE;
+
+const BYO = {
+	mode: "byo",
+	provider: "litellm",
+	modelId: "fixture/model",
+	baseUrl: process.env.FIXTURE_MODEL_URL || "http://model:3003/v1",
+	supportsStructuredOutputs: false,
+	providerOptions: null,
+};
 
 const state = {
 	failing: false,
 	instructions: "You are a fixture assistant. Always call the echo tool first.",
-	model: { mode: "byo", provider: "litellm", modelId: "fixture/model", baseUrl: process.env.FIXTURE_MODEL_URL || "http://model:3003/v1", supportsStructuredOutputs: false, providerOptions: null } as Record<string, unknown>,
+	model: (process.env.FIXTURE_MODEL_MODE === "managed"
+		? { mode: "managed", modelId: "openai/test" }
+		: BYO) as Record<string, unknown>,
 };
 
 const events: unknown[] = [];
+
+/** Mirrors the app: an environment key, or a service token this region trusts. */
+function authorized(header: string | undefined): boolean {
+	if (header === KEY) return true;
+	if (!PUBLIC_KEY_FILE || !header?.startsWith("Bearer ")) return false;
+	const [head, body, signature] = header.slice(7).split(".");
+	if (!head || !body || !signature) return false;
+	try {
+		const claims = JSON.parse(Buffer.from(body, "base64url").toString());
+		if (claims.iss !== "waniwani:agent-runtime") return false;
+		if (typeof claims.exp !== "number" || claims.exp * 1000 < Date.now()) return false;
+		return verify(
+			null,
+			Buffer.from(`${head}.${body}`),
+			createPublicKey(readFileSync(PUBLIC_KEY_FILE, "utf8")),
+			Buffer.from(signature, "base64url"),
+		);
+	} catch {
+		return false;
+	}
+}
 
 function payload() {
 	return {
@@ -36,7 +70,7 @@ app.get("/_events", (_request, response) => response.json({ events }));
 
 app.use((request, response, next) => {
 	if (request.path.startsWith("/_")) return next();
-	if (request.headers.authorization !== KEY) {
+	if (!authorized(request.headers.authorization)) {
 		return response.status(401).json({ success: false, message: "UNAUTHORIZED" });
 	}
 	if (state.failing) {

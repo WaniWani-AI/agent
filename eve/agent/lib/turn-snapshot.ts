@@ -8,6 +8,11 @@ export function holdSnapshot(sessionId: string, published: Published): void {
 	snapshots.set(sessionId, published);
 }
 
+/** Whatever the turn already holds, never a fetch: analytics must not depend on the network. */
+export function heldSnapshot(sessionId: string): Published | undefined {
+	return snapshots.get(sessionId);
+}
+
 export function releaseSnapshot(sessionId: string): void {
 	snapshots.delete(sessionId);
 }

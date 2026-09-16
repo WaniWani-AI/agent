@@ -1,19 +1,23 @@
 # WaniWani agent
 
-The Eve agent that serves WaniWani website chat. One runtime answers for any environment: it
-reads its tenant from the session token, fetches that environment's published prompt, model and
-channels from WaniWani, and exposes your MCP server's tools to the model over MCP.
+The Eve agent that serves WaniWani website chat. It reads its tenant from the session principal,
+fetches that environment's published prompt, model and channels from WaniWani, and exposes your
+MCP server's tools to the model over MCP.
 
-Run it yourself next to your MCP server, or let WaniWani host it. The same image does both; only
-the credential differs.
+Run it yourself next to your MCP server, or let WaniWani host it. The same image does both, and
+the credential is what picks the shape. A self-hosted deployment holds its environment's own key,
+serves that one environment, and takes the visitor from a header its backend sets. The hosted
+runtime holds an HMAC secret instead, takes one short-lived JWT per visitor, and serves whichever
+environment that token names. Setting both, or neither, refuses to start.
 
 ```
-eve/          the Eve project: the agent, its Dockerfile and its pinned dependencies
-fixtures/     a fake MCP server, a fake WaniWani and a fake model, for CI
-compose.yaml  the reference deployment: eve + postgres
-compose.ci.yaml  the same, plus the three fixtures
-test/         end-to-end tests that drive the runtime over HTTP
-docs/         operator documentation
+eve/             the Eve project: the agent, its Dockerfile and its pinned dependencies
+fixtures/        a fake MCP server, a fake WaniWani and a fake model, for CI
+compose.yaml     the reference deployment: eve + postgres
+compose.ci.yaml  the same plus the three fixtures, shaped by ci/*.env
+ci/              the two CI stack definitions and a throwaway keypair generator
+test/            end-to-end tests that drive the runtime over HTTP
+docs/            operator documentation
 ```
 
 Start at [docs/self-hosted-agent.md](docs/self-hosted-agent.md) to deploy it.
@@ -52,13 +56,21 @@ snapshot would fix it, and the ticket rules out holding configuration in durable
 
 ```sh
 cd eve && npm ci && npx tsc --noEmit && bun test agent && cd ..
-docker compose -f compose.ci.yaml up --build --wait
-bun test test/
-docker compose -f compose.ci.yaml down -v
+node ci/keygen.mjs
+
+docker compose -f compose.ci.yaml --env-file ci/selfhosted.env up --build --wait
+STACK=selfhosted AGENT_ENV_FILE=ci/selfhosted.env bun test test/
+docker compose -f compose.ci.yaml --env-file ci/selfhosted.env down -v
+
+docker compose -f compose.ci.yaml --env-file ci/hosted.env up --build --wait
+STACK=hosted AGENT_ENV_FILE=ci/hosted.env bun test test/
+docker compose -f compose.ci.yaml --env-file ci/hosted.env down -v
 ```
 
-The end-to-end suite takes about ninety seconds. One check waits out the full revalidation floor,
-and three restart the runtime.
+Checks (a) to (d) run against the self-hosted stack and take about eighty seconds: one waits out
+the full revalidation floor and three restart the runtime. Check (h) runs against the hosted stack
+and proves the whole hosted path, since the mock WaniWani verifies the Ed25519 service token the
+runtime signs. `ci/keygen.mjs` mints that keypair per run, so no private key is committed.
 
 ## Pins
 

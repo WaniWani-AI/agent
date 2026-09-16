@@ -21,6 +21,25 @@ Two smaller disagreements, both resolved in the code and flagged here:
 - **`turnCount` from `ctx.messages`.** eve hands a tool resolver an empty `messages` array at `turn.started` (`emitTurnPreamble` calls `handleEvent(event)` with no second argument), so counting user messages there always yields zero. It is derived from the turn sequence instead, which is the same number, and the e2e check pins it.
 - **`instructions/mcp-app.ts` is dropped.** The cache entry the ticket fixes is `{ config, tools, etag, checkedAt }`, which has no room for the MCP server's `initialize` instructions. The client exposes them and putting them back costs about twelve lines. Say so in review and I will.
 
+## Two credential forms, one channel function
+
+The deployment picks its form from the environment, and setting both or neither refuses to start.
+Self-hosted holds its environment's `wwk_` key, compared in constant time, and takes the visitor
+from `x-waniwani-visitor`. Hosted holds an HMAC secret and takes one short-lived JWT per visitor
+carrying a required `environmentId`. Both merge `x-waniwani-extra` into the principal, which is
+where `_meta["waniwani/extra"]` now comes from.
+
+The boot check lives in `entrypoint.sh` rather than at module scope in the channel. `eve build`
+loads every authored module, so a module-scope check made the image unbuildable without a
+deployment's credentials. The entrypoint is the real boot and the check is exact there: all four
+combinations are verified.
+
+CI runs the stack twice off `ci/selfhosted.env` and `ci/hosted.env`. Checks (a) to (d) run on the
+self-hosted stack with `Bearer wwk_test`; check (h) runs on the hosted stack with a JWT the test
+mints, which makes it an end-to-end proof of the whole hosted path: the mock WaniWani verifies the
+Ed25519 service token the runtime signs. `ci/keygen.mjs` mints that keypair per run, so no private
+key is committed.
+
 ## 🚨 eve authorizes no session-addressed route
 
 Every route under `/eve/v1/session/:id` runs `routeAuth` and then hands the request to
@@ -58,9 +77,10 @@ disappears with `sid`.
 | `eve/Dockerfile` | Copies `tsconfig.json` alongside `agent/`. |
 | `eve/entrypoint.sh` | The `_FILE` loop now covers six secrets and no installation credential, and assigns through `export name=value` so a PEM survives. |
 | `eve/agent/agent.ts` | The model rule, read off the turn snapshot. No credential fetch, no I/O in the resolver. |
-| `eve/agent/channels/eve.ts` | The shared-token comparison became one `verifyJwtHmac` call. |
+| `eve/agent/channels/eve.ts` | One auth function covering both forms: the constant-time key compare, the `verifyJwtHmac` call, and the `x-waniwani-extra` merge. |
+| `eve/entrypoint.sh` | Also refuses to boot when both credential forms are configured, or neither. |
 | `eve/agent/hooks/session-config.ts` | Became the `turn.started` gate: resolve the tenant, warm the cache, validate the model credential, snapshot. Releases the snapshot when the turn ends. |
-| `eve/agent/hooks/analytics.ts` | Gated on `WANIWANI_ANALYTICS=ingest`. Channel and visitor come from the principal, not the configuration. No `isTest`, no deployment id. Usage is attributed to the model id from `step.started` rather than whatever is cached at completion. |
+| `eve/agent/hooks/analytics.ts` | Gated on `WANIWANI_ANALYTICS=ingest`. Visitor comes from the principal and the channel from the same resolution `_meta` uses, read off the held snapshot so a report never waits on the network. No `isTest`, no deployment id. Usage is attributed to the model id from `step.started` rather than whatever is cached at completion. |
 | `eve/agent/instructions/waniwani.ts` | Reads the turn snapshot instead of calling the cache itself. |
 | `eve/agent/instructions/mcp-app.ts` | Deleted. See above. |
 | `eve/agent/lib/published.ts` | The three module variables became one `Map` keyed by tenant. `publishedFresh` is gone, because revalidation is now always off the turn path. A cold failure shares the one-minute floor and reports its last error. |
@@ -72,18 +92,30 @@ disappears with `sid`.
 | `compose.yaml` | Two services rather than three, since the MCP server is no longer built here. Publishes eve on loopback. |
 | `docs/self-hosted-agent.md` | "How configuration reaches a turn" and "Environment" rewritten to this contract. The demo cookie section and the `/agent/v1` route table are gone; PR 4 owns those. |
 
-New in this repo: `eve/agent/lib/tenant.ts` (tenant resolution and the Ed25519 service-token signer), `eve/agent/lib/model.ts` (the model rule as a pure function), `eve/agent/lib/turn-snapshot.ts`, `eve/tsconfig.json`, `fixtures/**`, `compose.ci.yaml`, `test/e2e.test.ts`, `.github/workflows/ci.yml`, `README.md`, `.env.example`.
+New in this repo: `eve/agent/lib/tenant.ts` (credential form, tenant resolution, channel resolution and the Ed25519 service-token signer), `eve/agent/lib/model.ts` (the model rule as a pure function), `eve/agent/lib/turn-snapshot.ts`, `eve/tsconfig.json`, `fixtures/**`, `compose.ci.yaml`, `ci/**`, `test/e2e.test.ts`, `.github/workflows/ci.yml`, `README.md`, `.env.example`.
+
+## 🚨 Over the line budget
+
+`eve/agent` is 1072 lines of source against a target of about 700, so past the stop-and-report
+threshold of 1050. `fixtures/` is 275 against about 300. Roughly where the extra went: about 190
+lines in three modules the rewritten contract asks for and the branch had no equivalent of
+(`tenant.ts`, `model.ts`, `turn-snapshot.ts`), and about 90 in hardening that eight review rounds
+turned up (session ownership, the snapshot rebuild after a restart, tool-list pagination,
+per-endpoint MCP clients, a delivery deadline on analytics). The rest is the moved code growing
+into the new payload shape. Say which of the hardening you want dropped and the number comes down;
+I would rather report the overage than compress readable code to hit it.
 
 ## How to see it working
 
 ```
-$ docker compose -f compose.ci.yaml up --build --wait
-$ bun test test/
+$ node ci/keygen.mjs
+$ docker compose -f compose.ci.yaml --env-file ci/selfhosted.env up --build --wait
+$ STACK=selfhosted AGENT_ENV_FILE=ci/selfhosted.env bun test test/
+ 4 pass | 1 skip | 0 fail          Ran 5 tests across 1 file. [76.30s]
 
- 5 pass
- 0 fail
- 20 expect() calls
-Ran 5 tests across 1 file. [79.02s]
+$ docker compose -f compose.ci.yaml --env-file ci/hosted.env up --build --wait
+$ STACK=hosted AGENT_ENV_FILE=ci/hosted.env bun test test/
+ 1 pass | 4 skip | 0 fail          Ran 5 tests across 1 file. [2.83s]
 ```
 
 One session, end to end, with the fixture MCP server recording what it received:
@@ -112,7 +144,7 @@ $ curl -s http://127.0.0.1:3002/_calls
 
 ```
 npx tsc --noEmit (eve)     clean
-bun test agent (eve)       27 pass | 0 fail
+bun test agent (eve)       36 pass | 0 fail
 bun test test/             5 pass | 0 fail
 docker compose up --wait   postgres, mcp, app, model, eve all healthy
 grep -rn "installation\|wwi_\|agent_token\|/agent/v1" eve/agent

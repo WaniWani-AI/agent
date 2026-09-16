@@ -9,6 +9,20 @@ const SERVICE_TOKEN_LIFETIME_SECONDS = 60;
 
 export type Tenant = { key: string; environmentId?: string };
 
+/** Which credential this deployment accepts, decided once by the environment. */
+export type CredentialForm = "self-hosted" | "hosted";
+
+export function credentialForm(): CredentialForm {
+	const selfHosted = Boolean(process.env.WANIWANI_API_KEY);
+	const hosted = Boolean(process.env.WANIWANI_AGENT_SECRET);
+	if (selfHosted === hosted) {
+		throw new Error(
+			"Set exactly one of WANIWANI_API_KEY (self-hosted) and WANIWANI_AGENT_SECRET (hosted)",
+		);
+	}
+	return selfHosted ? "self-hosted" : "hosted";
+}
+
 function attribute(
 	auth: SessionAuth | undefined,
 	name: string,
@@ -19,25 +33,53 @@ function attribute(
 
 export function tenantOf(auth: SessionAuth | undefined): Tenant {
 	const environmentId = attribute(auth, "environmentId");
-	const hosted = Boolean(process.env.WANIWANI_SERVICE_PRIVATE_KEY);
 
-	if (environmentId && !hosted) {
+	if (credentialForm() === "self-hosted") {
+		if (environmentId) {
+			throw new Error(
+				"Session credential names an environment, and WANIWANI_API_KEY serves only its own",
+			);
+		}
+		return { key: SELF_TENANT };
+	}
+	if (!environmentId) {
 		throw new Error(
-			"Session token names an environment, but this runtime authenticates with WANIWANI_API_KEY and can only serve its own",
+			"Session credential names no environment, and WANIWANI_AGENT_SECRET requires one",
 		);
 	}
-	if (!environmentId && hosted) {
-		throw new Error(
-			"Session token names no environment, and this runtime authenticates with WANIWANI_SERVICE_PRIVATE_KEY, which needs one",
-		);
-	}
-	return environmentId
-		? { key: environmentId, environmentId }
-		: { key: SELF_TENANT };
+	return { key: environmentId, environmentId };
 }
 
-export function channelIdOf(auth: SessionAuth | undefined): string | undefined {
-	return attribute(auth, "channelId");
+/**
+ * The channel a turn is attributed to. Hosted deployments carry it per visitor,
+ * self-hosted ones configure it once, and either way it has to be a channel the
+ * environment actually published.
+ */
+export function resolveChannel(input: {
+	auth: SessionAuth | undefined;
+	channels: readonly { id: string; label: string | null }[];
+}): { id: string; label: string | null } | undefined {
+	if (credentialForm() === "hosted") {
+		const claimed = attribute(input.auth, "channelId");
+		return claimed
+			? (input.channels.find((entry) => entry.id === claimed) ?? {
+					id: claimed,
+					label: null,
+				})
+			: input.channels[0];
+	}
+
+	const configured = process.env.WANIWANI_CHANNEL_ID;
+	if (!configured) {
+		return input.channels[0];
+	}
+	const found = input.channels.find((entry) => entry.id === configured);
+	if (!found) {
+		throw new Error(
+			`WANIWANI_CHANNEL_ID ${configured} is not a channel of this environment`,
+		);
+	}
+	return found;
 }
 
 /**

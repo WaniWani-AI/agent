@@ -26,10 +26,11 @@ services:
       WORKFLOW_POSTGRES_URL: postgres://eve:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/eve
       WORKFLOW_LOCAL_BASE_URL: http://eve:3001
 
-      # Required. Your identity to WaniWani, and the HMAC secret your backend
-      # signs visitor session tokens with. Both are mounted from ./.secrets.
+      # Required. Your environment key, which is both your identity to WaniWani
+      # and the credential your backend presents to this runtime. Mounted from
+      # ./.secrets. Setting WANIWANI_AGENT_SECRET as well refuses to start:
+      # that is the WaniWani-hosted form, which takes a JWT per visitor instead.
       WANIWANI_API_KEY_FILE: /run/secrets/api_key
-      WANIWANI_AGENT_SECRET_FILE: /run/secrets/agent_secret
 
       # Required for the model the environment publishes. `byo` needs
       # MODEL_API_KEY unless the payload carries its own key; `managed` needs
@@ -42,6 +43,9 @@ services:
       # Optional. Where your MCP server is reachable from inside this network,
       # when that differs from the URL WaniWani publishes for the environment.
       WANIWANI_MCP_URL: ${WANIWANI_MCP_URL:-}
+      # Optional. Channel that turns are attributed to. Must be one this
+      # environment published. Defaults to its first channel.
+      WANIWANI_CHANNEL_ID: ${WANIWANI_CHANNEL_ID:-}
       # Optional. `ingest` reports transcripts to WaniWani, `off` reports
       # nothing. WANIWANI_PUBLIC_KEY is required when it is on.
       WANIWANI_ANALYTICS: ${WANIWANI_ANALYTICS:-off}
@@ -53,7 +57,7 @@ services:
       AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
       # Tuning. Concurrent durable workers.
       WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
-    secrets: [api_key, agent_secret]
+    secrets: [api_key]
     healthcheck:
       test:
         ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/eve/v1/health').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
@@ -73,7 +77,6 @@ services:
 
 secrets:
   api_key: { file: ./.secrets/api_key }
-  agent_secret: { file: ./.secrets/agent_secret }
 
 volumes:
   workflow-data:
