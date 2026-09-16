@@ -4,10 +4,12 @@
  * `ui-stream.ts`, the only file here that knows the runtime is Eve.
  */
 
+/**
+ * `isCurrentTurnBoundaryEvent` in the runtime's own client. `turn.completed` is
+ * not one: the session parks an event later, and stopping short of that leaves
+ * the next continuation starting on a boundary that was never its own.
+ */
 const TURN_BOUNDARY = new Set([
-	"turn.completed",
-	"turn.failed",
-	"turn.cancelled",
 	"session.completed",
 	"session.failed",
 	"session.waiting",

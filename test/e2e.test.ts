@@ -433,6 +433,21 @@ onSelfHosted("(e) the router streams a turn as the model writes it", async () =>
 		}
 
 		expect(chunks.at(-1)).toEqual({ type: "finish", finishReason: "stop" });
+
+		// Straight after, on the session that just parked, which is the window
+		// where a follow-up can pick up the previous turn's boundary.
+		await modelControl({ tailDelayMs: 0 });
+		const again = await browserPost({
+			sessionId: response.headers.get("x-session-id"),
+			messages: [{ role: "user", parts: [{ type: "text", text: "and again" }] }],
+		});
+		expect(again.status).toBe(200);
+
+		const answer: string[] = [];
+		for await (const chunk of uiChunks(again)) {
+			if (chunk.type === "text-delta") answer.push(String(chunk.delta));
+		}
+		expect(answer.join("")).toBe("the fixture answered");
 	} finally {
 		await modelControl({ tailDelayMs: 0 });
 	}

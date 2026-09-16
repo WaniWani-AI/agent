@@ -82,15 +82,18 @@ export async function runTurn(input: RunTurnInput): Promise<{
 			: {}),
 	};
 
+	input.signal?.throwIfAborted();
+
+	// The submission takes no signal on purpose: a POST cancelled in flight may
+	// still have been accepted, leaving no session id to cancel the turn with.
 	const continuing = input.sessionId;
 	const sessionId = continuing ?? (await createEveSession(target, body));
 	const startIndex = continuing
 		? await continueEveSession(target, continuing, body)
 		: 0;
 
-	// The turn is already running by now, so a stream we cannot attach to would
-	// leave the runtime answering into nothing. That includes a browser dropping
-	// inside the window between taking the turn and opening its stream.
+	// The turn is running by now, so a stream we cannot attach to would leave the
+	// runtime answering into nothing.
 	const events = await openEveStream({
 		target,
 		sessionId,
@@ -144,9 +147,8 @@ export function encodeSse(
 					return;
 				}
 			} catch (error) {
-				// A turn's own failure arrives as an `error` chunk; this is the
-				// transport giving out, and the browser still needs a stream that
-				// terminates.
+				// A turn's own failure arrives as an `error` chunk; this is the transport
+				// giving out, and the browser still needs a stream that terminates.
 				controller.enqueue(
 					frame({
 						type: "error",
