@@ -21,6 +21,24 @@ Two smaller disagreements, both resolved in the code and flagged here:
 - **`turnCount` from `ctx.messages`.** eve hands a tool resolver an empty `messages` array at `turn.started` (`emitTurnPreamble` calls `handleEvent(event)` with no second argument), so counting user messages there always yields zero. It is derived from the turn sequence instead, which is the same number, and the e2e check pins it.
 - **`instructions/mcp-app.ts` is dropped.** The cache entry the ticket fixes is `{ config, tools, etag, checkedAt }`, which has no room for the MCP server's `initialize` instructions. The client exposes them and putting them back costs about twelve lines. Say so in review and I will.
 
+## 🚨 eve authorizes no session-addressed route
+
+Every route under `/eve/v1/session/:id` runs `routeAuth` and then hands the request to
+`attachSession(sessionId)`. Nothing compares the caller to the session. Confirmed by reading
+`eve-channel/index.js`, and it matters here because `tenantOf` reads the *initiator's*
+`environmentId`: a token valid for one environment could post into another environment's session
+and be answered using that environment's prompt, model and MCP server.
+
+The `turn.started` gate now rejects a continuation whose `environmentId` differs from the
+session's, or whose `sub` differs when both sides name a real visitor rather than `anonymous`.
+Seven cases pin it.
+
+The read-only half stays open. `GET /eve/v1/session/:id/stream`, plus cancel, clear, compact and
+reset, answer before any authored code runs, so a valid token and a session id are enough to read
+a transcript or end a conversation. Session ids are ULIDs and are not guessable, but they are not
+a credential either, and they travel to the browser. Closing it needs either PR 4's adapter to own
+that boundary or an ownership check inside eve. Written up under "Who may address a session".
+
 ## Files moved from the branch, one line each
 
 | File | What changed |
@@ -84,7 +102,7 @@ $ curl -s http://127.0.0.1:3002/_calls
 
 ```
 npx tsc --noEmit (eve)     clean
-bun test agent (eve)       19 pass | 0 fail
+bun test agent (eve)       26 pass | 0 fail
 bun test test/             5 pass | 0 fail
 docker compose up --wait   postgres, mcp, app, model, eve all healthy
 grep -rn "installation\|wwi_\|agent_token\|/agent/v1" eve/agent
@@ -104,6 +122,7 @@ Source budget: 869 lines in `eve/agent` against a target of about 700, 232 in `f
 - **Check (d) restarts the runtime to get a cold tenant.** In CI there is one tenant key, `self`, so an outage cannot make a brand-new session cold without one. The check asserts both halves the ticket asks for: an existing session keeps answering off the stale copy, and a cold one fails loudly instead of answering.
 - **Check (b) waits out the full sixty-second floor**, then spends one turn kicking the background pass before asserting on the next. A publish lands on the turn after the revalidation, which is what "always off the turn path" costs.
 - **Tests here were written by the same model that wrote the code.** The app's tester-subagent rule does not exist in this repo, per the ticket.
+- **What the review pass changed.** `/codex:review` raised six defects and all six were real. Beyond the authorization finding above: `tools/list` pagination was dropped after the first page, so an MCP server with a paged catalog silently lost tools; a cancelled or timed-out tool call closed the MCP client shared by every session on that tenant, failing unrelated visitors; analytics delivery was awaited inside a hook with no deadline, so a stalled ingest endpoint could hold a conversation open; the reference `compose.yaml` never forwarded `AI_GATEWAY_API_KEY`, so a managed payload could not resolve a credential there at all; and the enrollment steps wrote `0600` secret files that the image's own `USER node` cannot read on Linux. An earlier self-review fixed three more: two empty-string env overrides that compose actually produces, an MCP client cached per tenant but never per endpoint, and an `entrypoint.sh` eval that mangles any `_FILE` secret carrying a space or a newline.
 
 ## Manual steps after merge
 
