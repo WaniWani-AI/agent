@@ -172,6 +172,72 @@ Every secret above also accepts a `_FILE` variant, which is what `compose.yaml` 
 `WANIWANI_API_KEY_FILE=/run/secrets/api_key` reads the value out of the file instead of the
 environment.
 
+## Trying it against a local WaniWani
+
+The runtime talks to whatever `WANIWANI_API_URL` points at, so a local app works.
+
+1. Run the app on port 3000, and copy an environment key from its developers page.
+
+2. Point the runtime at it. `compose.yaml` brings its own Postgres, so nothing else is needed.
+
+   ```sh
+   mkdir -p .secrets
+   printf %s 'wwk_...' > .secrets/api_key
+   chmod 600 .secrets/*
+
+   cat > .env <<EOF
+   POSTGRES_PASSWORD=$(openssl rand -hex 32)
+   WANIWANI_API_URL=http://host.docker.internal:3000
+   WANIWANI_AGENT_PORT=4310
+   MODEL_API_KEY=            # your own model's key, for a byo environment
+   AI_GATEWAY_API_KEY=       # gateway key, for a managed one
+   EOF
+
+   docker compose up --build -d --wait
+   ```
+
+   `host.docker.internal` is how the container reaches your host on macOS and Windows. On Linux
+   use the host's address on the docker bridge. Set `WANIWANI_MCP_URL` the same way when the MCP
+   URL the environment publishes is not reachable from inside the container.
+
+3. Open a conversation. The credential is the same environment key.
+
+   ```sh
+   KEY=$(cat .secrets/api_key)
+   curl -s -X POST http://127.0.0.1:4310/eve/v1/session \
+     -H "authorization: Bearer $KEY" \
+     -H "content-type: application/json" \
+     -H "x-waniwani-visitor: you@example.com" \
+     -d '{"message":"hello"}'
+   ```
+
+   That answers `{"ok":true,"sessionId":"wrun_…","status":"accepted"}`.
+
+4. Watch the turn. The stream is NDJSON, one runtime event per line, ending at `turn.completed`.
+
+   ```sh
+   curl -sN "http://127.0.0.1:4310/eve/v1/session/wrun_…/stream?startIndex=0" \
+     -H "authorization: Bearer $KEY"
+   ```
+
+   `action.result` carries the tool result your MCP server returned, `_meta` included.
+   `message.completed` carries the answer.
+
+5. Send another message to the same conversation:
+
+   ```sh
+   curl -s -X POST http://127.0.0.1:4310/eve/v1/session/wrun_… \
+     -H "authorization: Bearer $KEY" \
+     -H "content-type: application/json" \
+     -d '{"message":"and again"}'
+   ```
+
+The behaviour worth confirming is the one the cache exists for: publish a new prompt in the
+dashboard mid-conversation, wait out the minute, send two more messages, and the second answers on
+the new prompt with nothing reloaded.
+
+`docker compose logs -f eve` shows the revalidation passes and any failure the runtime logged.
+
 ## Not in this release
 
 A session's visitor is fixed when it is created. A token continuing it has to carry the same
