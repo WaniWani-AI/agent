@@ -6,4 +6,5 @@ node_modules
 !.env.example
 .secrets/
 .DS_Store
+*.sw[a-p]
 dist

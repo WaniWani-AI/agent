@@ -1,8 +1,13 @@
 {
   "name": "@waniwani/agent-adapter",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.0",
   "description": "Turns a WaniWani agent runtime session into a UI message stream, and serves the /agent/v1 routes an MCP server mounts.",
-  "license": "MIT",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WaniWani-AI/agent.git",
+    "directory": "packages/adapter"
+  },
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -15,7 +20,9 @@
       "import": "./dist/express.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "bun test test",
