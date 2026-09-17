@@ -2,6 +2,7 @@ import { defineDynamic, defineTool } from "eve/tools";
 import type { JsonObject } from "../lib/json.js";
 import { callMcpTool, type McpMeta } from "../lib/mcp-catalog.js";
 import { toolModelOutput } from "../lib/tool-output.js";
+import { withViewBinding } from "../lib/view-binding.js";
 import { ANONYMOUS, resolveChannel, tenantOf } from "../lib/tenant.js";
 import { snapshotFor } from "../lib/turn-snapshot.js";
 import type { SessionChannel } from "../lib/session-config.js";
@@ -109,15 +110,18 @@ export default defineDynamic({
 						defineTool({
 							description: tool.description ?? tool.name,
 							inputSchema: withoutSessionId(tool.inputSchema),
-							execute: (input: Record<string, unknown>, toolCtx) =>
-								callMcpTool({
-									tenantKey,
-									mcpUrl,
-									name: tool.name,
-									arguments: wantsSessionId ? { ...input, sessionId } : input,
-									meta,
-									abortSignal: toolCtx.abortSignal,
-								}),
+							execute: async (input: Record<string, unknown>, toolCtx) =>
+								withViewBinding(
+									await callMcpTool({
+										tenantKey,
+										mcpUrl,
+										name: tool.name,
+										arguments: wantsSessionId ? { ...input, sessionId } : input,
+										meta,
+										abortSignal: toolCtx.abortSignal,
+									}),
+									tool.meta,
+								),
 							toModelOutput: (output: unknown) => toolModelOutput(output),
 						}),
 					];
