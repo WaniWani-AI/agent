@@ -132,6 +132,89 @@ verifies the Ed25519 service token the runtime signs. `ci/keygen.mjs` mints that
 so no private key is committed. The router stays unmounted there: it speaks for a whole
 environment with that environment's key, which a hosted runtime does not hold.
 
+## Releasing
+
+The runtime image and adapter share one version. Edit `packages/adapter/package.json` by hand,
+then refresh its lockfile with `npm install --package-lock-only --ignore-scripts` in that directory.
+Commit both files, tag the commit `vX.Y.Z`, and push the tag:
+
+```sh
+scripts/check-version.sh vX.Y.Z
+git add packages/adapter/package.json packages/adapter/package-lock.json
+git commit -m "chore: release X.Y.Z"
+git tag vX.Y.Z
+git push origin HEAD
+git push origin vX.Y.Z
+```
+
+The publish workflow runs the full CI suite first. A tag that does not match the adapter version
+fails before either artifact is published. It builds `eve/` for `linux/amd64` and `linux/arm64`
+and publishes the adapter with npm provenance. Keep release tags on their original commits.
+The npm dist-tag follows the version. A prerelease publishes under its own identifier, so
+`0.1.0-beta.0` lands on `beta` and `0.1.0-rc.1` on `rc`; a version with no prerelease goes to
+`latest`. `scripts/check-version.sh` derives both values and prints them as `VERSION` and
+`NPM_TAG` for the workflow to read. Re-running a tag rebuilds and pushes the image while leaving
+npm untouched, because the workflow skips a version the registry already carries.
+
+Publishing uses npm trusted publishing, matching the sdk and kit. The GitHub-hosted publish job
+has `id-token: write`; npm authenticates through OIDC without an `NPM_TOKEN` secret. Node 24
+provides a supported npm CLI (trusted publishing requires npm 11.5.1 or later).
+
+Before releasing, open `@waniwani/agent-adapter` on npm → Settings → Trusted publishing and add
+a GitHub Actions publisher with these exact values:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `WaniWani-AI` |
+| Repository | `agent` |
+| Workflow filename | `publish.yml` |
+| Environment name | Leave empty |
+| Allowed actions | Allow direct `npm publish` |
+
+This publisher belongs to the adapter package; the sdk's configuration does not cover it.
+See [npm's trusted publishing setup](https://docs.npmjs.com/trusted-publishers/).
+Trusted publishing is configured from the settings of a package that already exists, so a brand
+new name needs one manual publish before any of this works. Build the adapter, then from
+`packages/adapter` run `npm login` followed by
+`npm publish --access public --ignore-scripts --tag beta`. Configure the publisher afterwards and
+bump to a fresh version for the first automated release, because npm will not republish a version
+that is already on the registry.
+
+Run that bootstrap publish as an account belonging to the `@waniwani` npm organization, so the
+package is created inside it next to `@waniwani/sdk`. The `--access public` flag matters here.
+Without it a scoped package defaults to restricted, and customers cannot install it.
+
+After the first image push, set the organization's `agent` container package visibility to Public
+in its GitHub package settings. [GHCR defaults new packages to private](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#pushing-container-images),
+even when the source repository is public; customer pulls need public package access.
+
+After the workflow succeeds, verify both artifacts (use the chosen prerelease version for a
+first release candidate):
+
+```sh
+docker pull ghcr.io/waniwani-ai/agent:X.Y.Z
+npm view @waniwani/agent-adapter@X.Y.Z version
+npm view @waniwani/agent-adapter dist-tags
+```
+
+The hosted deployment target is still undecided in [WAN-1078](https://linear.app/waniwani/issue/WAN-1078).
+`deploy/hosted/` is deferred until that decision is recorded, as required by WAN-1150.
+
+## Pinning
+
+Keep the runtime image and template's adapter dependency on exactly the same release:
+
+```yaml
+services:
+  eve:
+    image: ghcr.io/waniwani-ai/agent:X.Y.Z
+```
+
+Install `@waniwani/agent-adapter@X.Y.Z` in the template with `npm install --save-exact`, so the
+dependency has no `^` or `~` range. The image has no `latest` or other moving tag. `beta` and
+`latest` on npm do move as releases land, which is why the template pins a version instead of a
+tag.
+
 ## Pins
 
 `eve@0.53.0`, `@workflow/world-postgres@5.0.0-beta.40`, `ai@7.0.93`, `@ai-sdk/openai@4.0.36`,
