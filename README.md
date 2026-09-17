@@ -151,7 +151,7 @@ The publish workflow runs the full CI suite first. A tag that does not match the
 fails before either artifact is published. It builds `eve/` for `linux/amd64` and `linux/arm64`
 and publishes the adapter with npm provenance. Keep release tags on their original commits.
 The npm dist-tag follows the version. A prerelease publishes under its own identifier, so
-`0.1.0-beta.0` lands on `beta` and `0.1.0-rc.1` on `rc`; a version with no prerelease goes to
+`0.1.0-beta.1` lands on `beta` and `0.1.0-rc.1` on `rc`; a version with no prerelease goes to
 `latest`. `scripts/check-version.sh` derives both values and prints them as `VERSION` and
 `NPM_TAG` for the workflow to read. Re-running a tag rebuilds and pushes the image while leaving
 npm untouched, because the workflow skips a version the registry already carries.

@@ -1,6 +1,6 @@
 {
   "name": "@waniwani/agent-adapter",
-  "version": "0.1.0-beta.0",
+  "version": "0.1.0-beta.1",
   "description": "Turns a WaniWani agent runtime session into a UI message stream, and serves the /agent/v1 routes an MCP server mounts.",
   "license": "Apache-2.0",
   "repository": {
