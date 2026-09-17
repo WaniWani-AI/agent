@@ -33,6 +33,18 @@ describe("withViewBinding", () => {
 		expect(withViewBinding(bound, { ui: { resourceUri: URI } })).toBe(bound);
 	});
 
+	test("only the spellings the result lacks are filled in", () => {
+		const bound = { ...RESULT, _meta: { "ui/resourceUri": "ui://own.html" } };
+		const out = withViewBinding(bound, {
+			ui: { resourceUri: URI },
+			"ui/resourceUri": URI,
+		}) as { _meta: Record<string, unknown> };
+		expect(out._meta).toEqual({
+			"ui/resourceUri": "ui://own.html",
+			ui: { resourceUri: URI },
+		});
+	});
+
 	test("a definition without a view changes nothing", () => {
 		expect(withViewBinding(RESULT, { "some/other": 1 })).toBe(RESULT);
 		expect(withViewBinding(RESULT, undefined)).toBe(RESULT);
