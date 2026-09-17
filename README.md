@@ -218,9 +218,15 @@ tag.
 ## Pins
 
 `eve@0.53.0`, `@workflow/world-postgres@5.0.0-beta.40`, `ai@7.0.93`, `@ai-sdk/openai@4.0.36`,
-`@modelcontextprotocol/sdk@1.30.0`, `jose@6.1.0`, Node 24. The Postgres World pin is load-bearing:
-the default npm tag is incompatible with the Workflow line eve bundles. Do not move any of them
-without running the end-to-end suite.
+`@modelcontextprotocol/sdk@1.30.0`, `jose@6.1.0`, Node 24.
+
+The runtime image builds from `node:24-trixie-slim`, Debian 13, pinned by digest so that rebuilding
+a release tag cannot pick up a different Debian or Node patch level. Read the current digest with
+`docker buildx imagetools inspect node:24-trixie-slim` when you move it, and take the index digest
+rather than one of the per-platform manifests, or the multi-arch build breaks.
+
+The Postgres World pin is load-bearing: the default npm tag is incompatible with the Workflow line
+eve bundles. Do not move any of them without running the end-to-end suite.
 
 The image and the package are versioned together, because the adapter reimplements the runtime's
 wire protocol over `fetch` rather than importing its client.
