@@ -9,6 +9,8 @@ export type McpTool = {
 	name: string;
 	description?: string;
 	inputSchema: JsonObject;
+	/** The definition's `_meta`, which is where a server binds a tool to a view. */
+	meta?: Record<string, unknown>;
 };
 
 export type McpMeta = Record<string, unknown>;
@@ -86,6 +88,7 @@ export async function listMcpTools(input: {
 					name: tool.name,
 					description: tool.description,
 					inputSchema: tool.inputSchema as JsonObject,
+					...(tool._meta ? { meta: tool._meta } : {}),
 				});
 			}
 			if (!result.nextCursor || result.nextCursor === cursor) {
