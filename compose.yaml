@@ -10,6 +10,10 @@ services:
       POSTGRES_USER: eve
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: eve
+      # The postgres:18 image keeps its data under /var/lib/postgresql/18 and
+      # refuses to start when a volume sits at the old path with nothing else
+      # pointing at it. Naming the path keeps the volume above in use.
+      PGDATA: /var/lib/postgresql/data
     volumes: ["workflow-data:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U eve"]
