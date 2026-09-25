@@ -1,9 +1,10 @@
 import { defineDynamic, defineTool } from "eve/tools";
 import type { JsonObject } from "../lib/json.js";
 import { callMcpTool, type McpMeta } from "../lib/mcp-catalog.js";
+import { mcpMeta } from "../lib/mcp-meta.js";
 import { toolModelOutput } from "../lib/tool-output.js";
 import { withViewBinding } from "../lib/view-binding.js";
-import { ANONYMOUS, resolveChannel, tenantOf } from "../lib/tenant.js";
+import { resolveChannel, tenantOf } from "../lib/tenant.js";
 import { snapshotFor } from "../lib/turn-snapshot.js";
 import type { SessionChannel } from "../lib/session-config.js";
 import type { DynamicResolveContext } from "eve/tools";
@@ -40,44 +41,25 @@ function withoutSessionId(schema: JsonObject): JsonObject {
 	};
 }
 
-function parsedExtra(raw: unknown): Record<string, unknown> | undefined {
-	if (typeof raw !== "string") return undefined;
-	try {
-		const value: unknown = JSON.parse(raw);
-		return typeof value === "object" && value !== null && !Array.isArray(value)
-			? (value as Record<string, unknown>)
-			: undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 function turnCountOf(event: unknown): number {
 	const sequence = (event as { data?: { sequence?: unknown } })?.data?.sequence;
 	return typeof sequence === "number" ? sequence + 1 : 1;
 }
 
-/** The same keys the app's `buildMcpMeta` produces, so an MCP server reads one shape. */
 function buildMeta(input: {
 	ctx: DynamicResolveContext;
 	channels: SessionChannel[];
 	turnCount: number;
 }): McpMeta {
 	const { auth } = input.ctx.session;
-	const visitorId = auth.initiator?.subject;
-	const channel = resolveChannel({ auth, channels: input.channels });
-	const extra = parsedExtra(auth.current?.attributes.extra);
-
-	return {
-		...(extra ? { "waniwani/extra": extra } : {}),
-		"waniwani/sessionId": input.ctx.session.id,
-		...(visitorId && visitorId !== ANONYMOUS
-			? { "waniwani/visitorId": visitorId }
-			: {}),
-		"waniwani/turnCount": input.turnCount,
-		...(channel ? { "waniwani/channelId": channel.id } : {}),
-		...(channel?.label ? { "waniwani/source": channel.label } : {}),
-	};
+	return mcpMeta({
+		sessionId: input.ctx.session.id,
+		visitorId: auth.initiator?.subject,
+		turnCount: input.turnCount,
+		channel: resolveChannel({ auth, channels: input.channels }),
+		extraHeader: auth.current?.attributes.extra,
+		contextHeader: auth.current?.attributes.context,
+	});
 }
 
 export default defineDynamic({

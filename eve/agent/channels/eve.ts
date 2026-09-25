@@ -20,9 +20,14 @@ function matches(token: string | null, expected: string): boolean {
 	return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-function withExtra(request: Request, attributes: Attributes): Attributes {
+function withBackendHeaders(request: Request, attributes: Attributes): Attributes {
 	const extra = request.headers.get("x-waniwani-extra");
-	return extra ? { ...attributes, extra } : attributes;
+	const context = request.headers.get("x-waniwani-context");
+	return {
+		...attributes,
+		...(extra ? { extra } : {}),
+		...(context ? { context } : {}),
+	};
 }
 
 export default eveChannel({
@@ -34,7 +39,7 @@ export default eveChannel({
 				if (!matches(token, process.env.WANIWANI_API_KEY ?? "")) return null;
 				const subject = request.headers.get("x-waniwani-visitor") || ANONYMOUS;
 				return {
-					attributes: withExtra(request, {}),
+					attributes: withBackendHeaders(request, {}),
 					authenticator: "waniwani-environment-key",
 					issuer: "waniwani:agent",
 					principalId: `waniwani:agent:${subject}`,
@@ -57,7 +62,7 @@ export default eveChannel({
 			const addressed = addressedSession(request);
 			if (addressed && sessionAuth.attributes.sid !== addressed) return null;
 
-			return { ...sessionAuth, attributes: withExtra(request, sessionAuth.attributes) };
+			return { ...sessionAuth, attributes: withBackendHeaders(request, sessionAuth.attributes) };
 		},
 	],
 });

@@ -35,7 +35,7 @@ calls in process.
 
 ```ts
 mintSessionToken({ secret, sub, environmentId?, channelId?, sid? }): Promise<string>
-runTurn({ eveUrl, credential, visitorId?, message, sessionId?, clientContext?, extra?, signal? })
+runTurn({ eveUrl, credential, visitorId?, message, sessionId?, clientContext?, extra?, context?, signal? })
 cancelTurn({ eveUrl, credential, sessionId }): Promise<void>
 runtimeHealth({ eveUrl, credential }): Promise<unknown>
 encodeSse(chunks): ReadableStream<Uint8Array>

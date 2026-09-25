@@ -1,14 +1,28 @@
 import type { JsonObject } from "./json.js";
 import type { SessionModel } from "./session-config.js";
 
-const DEFAULT_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh/v1";
+export type ProviderOptions = Record<string, JsonObject>;
 
-export type ModelAccess = {
-	baseUrl: string;
-	apiKey: string;
-	modelId: string;
-	providerOptions: Record<string, JsonObject> | null;
-};
+/**
+ * A `gateway` model is a slug eve hands to the AI Gateway provider, which reads
+ * `providerOptions.gateway` (the app's fallback chain). An `openai-compatible`
+ * model is an endpoint the runtime builds a provider object for.
+ */
+export type ModelAccess =
+	| {
+			kind: "gateway";
+			modelId: string;
+			providerOptions: ProviderOptions | null;
+			contextWindowTokens: number | null;
+	  }
+	| {
+			kind: "openai-compatible";
+			baseUrl: string;
+			apiKey: string;
+			modelId: string;
+			providerOptions: ProviderOptions | null;
+			contextWindowTokens: number | null;
+	  };
 
 function required(name: string, value: string | undefined): string {
 	if (!value) {
@@ -21,16 +35,28 @@ function required(name: string, value: string | undefined): string {
 export function resolveModelAccess(model: SessionModel): ModelAccess {
 	if (model.mode === "byo") {
 		return {
+			kind: "openai-compatible",
 			baseUrl: model.baseUrl,
 			apiKey: model.apiKey ?? required("MODEL_API_KEY", process.env.MODEL_API_KEY),
 			modelId: model.modelId,
 			providerOptions: model.providerOptions ?? null,
+			contextWindowTokens: null,
 		};
 	}
-	return {
-		baseUrl: process.env.AI_GATEWAY_BASE_URL || DEFAULT_GATEWAY_BASE_URL,
-		apiKey: required("AI_GATEWAY_API_KEY", process.env.AI_GATEWAY_API_KEY),
-		modelId: model.modelId,
-		providerOptions: null,
-	};
+	const providerOptions = model.providerOptions ?? null;
+	const contextWindowTokens = model.contextWindowTokens ?? null;
+	const baseUrl = process.env.AI_GATEWAY_BASE_URL;
+	if (baseUrl) {
+		return {
+			kind: "openai-compatible",
+			baseUrl,
+			apiKey: required("AI_GATEWAY_API_KEY", process.env.AI_GATEWAY_API_KEY),
+			modelId: model.modelId,
+			providerOptions,
+			contextWindowTokens,
+		};
+	}
+	// On Vercel the Gateway provider falls back to the project's OIDC token.
+	if (!process.env.VERCEL) required("AI_GATEWAY_API_KEY", process.env.AI_GATEWAY_API_KEY);
+	return { kind: "gateway", modelId: model.modelId, providerOptions, contextWindowTokens };
 }
