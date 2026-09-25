@@ -59,8 +59,9 @@ services:
       # Optional. Points managed inference somewhere other than the AI Gateway.
       # Leave empty in production.
       AI_GATEWAY_BASE_URL: ${AI_GATEWAY_BASE_URL:-}
-      # Tuning. Concurrent durable workers.
-      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
+      # Tuning. Concurrent durable workers. Every streaming answer holds one
+      # until it ends, and Stop waits for a free one.
+      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: ${WORKFLOW_POSTGRES_WORKER_CONCURRENCY:-50}
     secrets: [api_key]
     healthcheck:
       test:

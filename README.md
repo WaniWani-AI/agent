@@ -197,8 +197,17 @@ npm view @waniwani/agent-adapter@X.Y.Z version
 npm view @waniwani/agent-adapter dist-tags
 ```
 
-The hosted deployment target is still undecided in [WAN-1078](https://linear.app/waniwani/issue/WAN-1078).
-`deploy/hosted/` is deferred until that decision is recorded, as required by WAN-1150.
+## Hosted on Vercel
+
+WaniWani runs the hosted form as the Vercel project `agent-staging` in the `waniwani` team, one
+function region (iad1), Git-connected to `main` with Root Directory `eve`. `eve build` writes
+`.vercel/output` there, and `agent.ts` leaves the Workflow world to eve, which picks Vercel
+Workflow. Everywhere else it selects the Postgres world.
+
+Production carries no Deployment Protection, because the channel checks the visitor JWT on every
+session route; previews stay behind Vercel Authentication. The project holds
+`WANIWANI_AGENT_SECRET`, `WANIWANI_SERVICE_PRIVATE_KEY`, `WANIWANI_REGION`, `WANIWANI_API_URL` and
+`AI_GATEWAY_API_KEY`. `WANIWANI_API_KEY` stays unset, which is what makes it the hosted form.
 
 ## Pinning
 
@@ -217,8 +226,8 @@ tag.
 
 ## Pins
 
-`eve@0.53.0`, `@workflow/world-postgres@5.0.0-beta.40`, `ai@7.0.93`, `@ai-sdk/openai@4.0.36`,
-`@modelcontextprotocol/sdk@1.30.0`, `jose@6.1.0`, Node 24.
+`eve@0.66.3`, `@workflow/world-postgres@5.0.0-beta.46`, `ai@7.0.114`, `@ai-sdk/openai@4.0.75`,
+`just-bash@3.4.2`, `@modelcontextprotocol/sdk@1.30.0`, `jose@6.1.0`, Node 24.
 
 The runtime image builds from `node:24-trixie-slim`, Debian 13, pinned by digest so that rebuilding
 a release tag cannot pick up a different Debian or Node patch level. Read the current digest with
@@ -231,20 +240,18 @@ eve bundles. Do not move any of them without running the end-to-end suite.
 The image and the package are versioned together, because the adapter reimplements the runtime's
 wire protocol over `fetch` rather than importing its client.
 
-The runtime build applies checked patches in `eve/scripts/` to these exact versions and runs
-with `WORKFLOW_MAX_INLINE_STEPS=0`. PostgreSQL serializes workflow invocations; running a model
-step inline would hold that invocation open and block the replay delivering cancellation.
-Separate step jobs let a follow-up interrupt generation promptly. The Workflow patch enables zero
-(the bundled parser otherwise rejects it), is idempotent, and fails on an Eve upgrade until
-reviewed. Keep the setting when running the built runtime outside Docker; `npm start` sets it.
-The Postgres patch routes workflow replays and Eve's cancellation-forwarding step to a control
-task with two reserved workers, in addition to the configured ordinary worker pool. Without
-reserved capacity, model calls filling the pool would also block cancellation. Both pools
-share the existing per-run serialization and duplicate-message protection.
-These changes add queue round trips and two worker slots; retain the live interruption and
-saturation tests when upgrading either dependency or changing runtime concurrency.
+eve prepares a sandbox at build time even for an agent with no shell tools, so `agent/sandbox.ts`
+selects just-bash, which runs in process on every host. A Vercel build prepares it with the
+build's OIDC token.
+
+Stop cancels a streaming answer in process. On the Postgres world each streaming answer holds a
+worker until it ends, so a pool full of answers delays Stop until one of them finishes. The pool
+defaults to 50 and `WORKFLOW_POSTGRES_WORKER_CONCURRENCY` moves it. A follow-up that arrives while
+an answer is streaming waits for the next step boundary, and the text already streamed stays.
 
 `bun run test/continuation.ts` exercises the real self-hosted stack against a gated model on
-host port 13005. It forces the tail-read/POST race and checks that steering aborts the old model
-connection and preserves both user messages. It also checks rapid A/B/C follow-ups and late
-cleanup of earlier responses, and interruption with all five model workers occupied. Compose maps `host.docker.internal` for Linux CI.
+host port 13005. It forces the tail-read/POST race, checks that a follow-up sent mid-answer keeps
+the streamed text and reaches the model with both user messages, and that rapid A/B/C follow-ups
+fold into one answer that cleanup of the earlier responses cannot cancel. It also stops one of
+five streaming sessions and requires `turn.cancelled` within five seconds. Compose maps
+`host.docker.internal` for Linux CI.

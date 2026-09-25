@@ -2,11 +2,11 @@
  * Live continuation regression test against the real PostgreSQL runtime.
  * Start an isolated self-hosted compose.ci.yaml stack, then run:
  *   bun run test/continuation.ts
- * Uses real Eve + the adapter, with a gated OpenAI-compatible model.
- * The race case pauses only the client's tail-read response, never Eve itself.
+ * Uses real Eve + the adapter, with a gated OpenAI-compatible model. The race
+ * case pauses only the client's tail-read response, never Eve itself.
  */
 import assert from "node:assert/strict";
-import { runTurn } from "../packages/adapter/src/core.ts";
+import { cancelTurn, runTurn } from "../packages/adapter/src/core.ts";
 
 const EVE = "http://127.0.0.1:3001";
 const APP = "http://127.0.0.1:3004";
@@ -158,6 +158,13 @@ async function scenario(kind: "settled" | "race" | "steer", iteration: number) {
 		}) as typeof fetch;
 		const turn = await runTurn({ eveUrl: EVE, credential: "wwk_test", sessionId, message: secondMessage,
 			signal: abort.signal });
+		if (kind === "steer") {
+			await Bun.sleep(300);
+			assert.equal(calls.length, callOffset + 1, "B must not reach the model before A's turn commits a boundary");
+			assert.equal(firstCall.finished, false, "A must still be generating while B waits to steer");
+			assert.equal(firstCall.connectionAborted, false, "Steering after output began must not abort A's connection");
+			firstCall.release();
+		}
 		const chunks: any[] = [];
 		for await (const chunk of turn.chunks) chunks.push(chunk);
 		globalThis.fetch = nativeFetch;
@@ -186,8 +193,21 @@ async function scenario(kind: "settled" | "race" | "steer", iteration: number) {
 		assert.equal(adapterText, "ANSWER_B");
 		assert(bUsers.includes(firstMessage), "Replacement lost the original user input");
 		if (kind === "steer") {
-			assert.equal(firstCall.finished, false, "Replacement waited for the original model response to finish");
-			await until(() => firstCall.connectionAborted, "Original model connection aborts");
+			const firstCompleted = raw.events.find((event) => event.type === "message.completed" && event.data?.turnId === firstTurn);
+			assert(firstCompleted, "A's completed message must be recorded on the session stream");
+			assert.match(String(firstCompleted!.data!.message), /^ANSWER_A\.*$/, "A's streamed text must survive steering");
+			const bAssistantTexts = JSON.stringify(bCall.messages.filter((message) => message.role === "assistant"));
+			assert(bAssistantTexts.includes("ANSWER_A"), "The model call behind B must see A's own assistant answer");
+			if (firstTurn !== secondTurn) {
+				// The contract starts a new turn only once A's own turn has settled;
+				// verify the cause, not just the outcome.
+				assert.equal(started.length, 2);
+				const secondTurnStarted = raw.events.find((event) => event.type === "turn.started" && event.data?.turnId === secondTurn)!;
+				assert(raw.events.indexOf(firstCompleted!) < raw.events.indexOf(secondTurnStarted),
+					"A new turn must only start after A's own turn actually completed");
+			} else {
+				assert.equal(started.length, 1, "Steering before A settled must land in the same turn");
+			}
 		}
 		const report = { kind, iteration, sessionId, tail, accepted, adapterText, runtimeText,
 			runtimeVersion: raw.events.find((event) => event.type === "session.started")?.data?.runtime?.eveVersion,
@@ -232,27 +252,35 @@ async function rapidFollowUps() {
 		await until(() => calls.length > offset, "A model starts");
 		const b = await runTurn({ eveUrl: EVE, credential: "wwk_test", sessionId, message: "FOLLOW_UP_B rapid", signal: abort.signal });
 		const bText = drain(b);
-		// Submit C while A's cancellation or B's model call is still in flight.
-		// Eve may batch B+C or start C as another replacement; both must be safe.
 		const c = await runTurn({ eveUrl: EVE, credential: "wwk_test", sessionId, message: "FOLLOW_UP_C rapid", signal: abort.signal });
 		const cText = drain(c);
-		await until(() => calls.slice(offset).some((call) => call.answer === "ANSWER_C"), "C model starts");
-		const cCall = calls.slice(offset).find((call) => call.answer === "ANSWER_C")!;
-		await Promise.all([a.cancel(), b.cancel()]);
-		// Let the asynchronous cancel commands settle while C is still generating.
-		await Bun.sleep(1_500);
-		assert.equal(cCall.connectionAborted, false, "Old response cleanup aborted C");
-		cCall.release();
-		assert.match(await cText, /^ANSWER_C\.*$/);
-		await Promise.all([aText, bText]);
-		const replacement = calls.slice(offset).find((call) => call.answer === "ANSWER_C")!;
-		const users = JSON.stringify(replacement.messages.filter((message) => message.role === "user"));
+
+		await Bun.sleep(300);
+		assert.equal(calls.length, offset + 1, "B and C must not reach the model before A's turn settles");
+		calls[offset]!.release();
+
+		await until(() => calls.length > offset + 1, "the folded B+C replacement starts");
+		assert.equal(calls.length, offset + 2, "B and C must fold into one replacement turn, not two");
+		const replacement = calls[offset + 1]!;
+		const replacementUsers = JSON.stringify(replacement.messages.filter((message) => message.role === "user"));
 		for (const input of ["INITIAL_A rapid", "FOLLOW_UP_B rapid", "FOLLOW_UP_C rapid"]) {
-			assert(users.includes(input), `Rapid replacement lost ${input}`);
+			assert(replacementUsers.includes(input), `Rapid replacement lost ${input}`);
 		}
-		assert.equal(calls[offset]!.finished, false);
-		await until(() => calls[offset]!.connectionAborted, "Rapid follow-up aborts A");
-		console.log("PASS rapid A/B/C: latest answer retains all messages and survives old response cleanup");
+
+		await Bun.sleep(100);
+		await Promise.all([a.cancel(), b.cancel()]);
+		// Cancellation is asynchronous; give it room to reach Eve before checking.
+		await Bun.sleep(500);
+		assert.equal(replacement.finished, false, "Cleanup fired before the replacement was done generating");
+		assert.equal(replacement.connectionAborted, false, "Cleaning up A or B must not cancel C's answer");
+
+		replacement.release();
+		const [aResult, bResult, cResult] = await Promise.all([aText, bText, cText]);
+		assert.match(aResult, /^ANSWER_A\.*$/);
+		assert.match(bResult, /^ANSWER_C\.*$/);
+		assert.match(cResult, /^ANSWER_C\.*$/);
+		assert.equal(bResult, cResult, "B and C share the one folded replacement turn");
+		console.log("PASS rapid A/B/C: cleaning up A and B never cancels C's answer, which carries all three messages");
 	} finally {
 		clearTimeout(timeout);
 		abort.abort();
@@ -261,47 +289,46 @@ async function rapidFollowUps() {
 	}
 }
 
-async function saturatedWorkers() {
-	// Both Compose configurations give ordinary jobs five worker slots.
-	const workers = 5;
+async function stopUnderLoad() {
+	// Five concurrent sessions are enough to prove Stop reaches only the
+	// targeted turn; the Postgres world's pool (default 50) is not a constraint
+	// this test depends on.
+	const sessions = 5;
 	const offset = calls.length;
-	const sessions: string[] = [];
+	const ids: string[] = [];
 	const readers: Awaited<ReturnType<typeof watch>>[] = [];
 	const abort = new AbortController();
 	const timeout = setTimeout(() => abort.abort(), 30_000);
 	try {
-		for (let i = 0; i < workers; i++) {
+		for (let i = 0; i < sessions; i++) {
 			const created = await nativeFetch(`${EVE}/eve/v1/session`, {
-				method: "POST", headers, body: JSON.stringify({ message: `INITIAL_A saturated ${i}` }),
+				method: "POST", headers, body: JSON.stringify({ message: `INITIAL_A stop ${i}` }),
 			});
 			assert.equal(created.status, 202);
 			const { sessionId } = await created.json() as { sessionId: string };
-			sessions.push(sessionId);
+			ids.push(sessionId);
 			readers.push(await watch(sessionId));
 		}
-		await until(() => calls.length === offset + workers, "All model workers occupied");
+		await until(() => calls.length === offset + sessions, "All five model calls started");
 		const originals = calls.slice(offset);
 		assert(originals.every((call) => !call.finished && !call.connectionAborted));
-		const turn = await runTurn({
-			eveUrl: EVE, credential: "wwk_test", sessionId: sessions[0],
-			message: "FOLLOW_UP_B saturated", signal: abort.signal,
-		});
-		let text = "";
-		for await (const chunk of turn.chunks) if (chunk.type === "text-delta") text += chunk.delta;
-		assert.equal(text, "ANSWER_B");
-		const interrupted = originals.find((call) => JSON.stringify(call.messages).includes("INITIAL_A saturated 0"))!;
-		await until(() => interrupted.connectionAborted, "Saturated model call interrupted");
-		assert(originals.every((call) => !call.finished), "A model had to finish to free cancellation capacity");
-		assert(originals.filter((call) => call !== interrupted).every((call) => !call.connectionAborted));
-		const replacement = calls.slice(offset).find((call) => call.answer === "ANSWER_B")!;
-		assert(JSON.stringify(replacement.messages).includes("INITIAL_A saturated 0"));
-		console.log("PASS saturated workers: follow-up interrupts while all five model slots are occupied");
+		const target = 0;
+		const targetCall = originals[target]!;
+		const startedAt = Date.now();
+		await cancelTurn({ eveUrl: EVE, credential: "wwk_test", sessionId: ids[target]! });
+		await until(() => readers[target]!.events.some((event) => event.type === "turn.cancelled"), "turn.cancelled");
+		const cancelledMs = Date.now() - startedAt;
+		assert(cancelledMs < 5_000, `turn.cancelled took ${cancelledMs}ms, expected under 5000ms`);
+		await until(() => targetCall.connectionAborted, "Stopped session's model connection aborts");
+		const others = originals.filter((call) => call !== targetCall);
+		assert(others.every((call) => !call.connectionAborted && !call.finished), "Stopping one session disturbed another");
+		console.log(`PASS stop under load: turn.cancelled in ${cancelledMs}ms, model connection aborted, other ${others.length} sessions untouched`);
 	} finally {
 		clearTimeout(timeout);
 		abort.abort();
 		for (const call of calls.slice(offset)) call.release();
 		for (const reader of readers) await reader.close();
-		for (const sessionId of sessions) {
+		for (const sessionId of ids) {
 			await nativeFetch(`${EVE}/eve/v1/session/${sessionId}/cancel`, { method: "POST", headers, body: "{}" });
 		}
 	}
@@ -316,9 +343,9 @@ try {
 		}
 	}
 	await rapidFollowUps();
-	await saturatedWorkers();
+	await stopUnderLoad();
 	await Bun.write("/tmp/agent-continuation-results.json", JSON.stringify(reports, null, 2));
-	console.log(`Completed ${reports.length} continuation scenarios plus rapid follow-ups and saturated workers; see /tmp/agent-continuation-results.json.`);
+	console.log(`Completed ${reports.length} continuation scenarios plus rapid follow-ups and stop-under-load; see /tmp/agent-continuation-results.json.`);
 } finally {
 	globalThis.fetch = nativeFetch;
 	for (const call of calls) call.release();

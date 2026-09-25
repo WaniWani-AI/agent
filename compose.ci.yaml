@@ -56,7 +56,6 @@ services:
     environment:
       PORT: "3001"
       WORKFLOW_POSTGRES_URL: postgres://eve:ci@postgres:5432/eve
-      WORKFLOW_POSTGRES_WORKER_CONCURRENCY: "5"
       WORKFLOW_LOCAL_BASE_URL: http://eve:3001
       WANIWANI_API_URL: http://app:3004
       WANIWANI_API_KEY: ${WANIWANI_API_KEY:-}

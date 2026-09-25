@@ -1,6 +1,6 @@
 # PR #2 continuation diagnostic
 
-These are historical investigation notes. The fix is now implemented locally; see the final section and `README.md` for the current regression commands.
+These are historical investigation notes from the eve 0.52 and 0.53 runtime. The patches they describe were removed when the runtime moved to eve 0.66.3, which cancels a streaming answer in process; `README.md` has the current behavior and regression commands.
 
 Tested commit `6c6f04d64df9ac777ebeb841f118935c9491cdae`, with the running container reporting Eve `0.52.2`. No application or adapter implementation changes were made.
 

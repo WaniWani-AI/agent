@@ -166,7 +166,7 @@ config carries no key, so hosted deployments are on managed inference until a br
 | `WANIWANI_ANALYTICS` | no | `ingest` reports transcripts to WaniWani, `off` reports nothing. Defaults to `off`, and is refused outright on a runtime serving more than one environment. |
 | `AI_GATEWAY_BASE_URL` | no | Overrides the gateway endpoint. Leave unset in production. |
 | `WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS` | no | Context window the runtime assumes. Defaults to `32000`. |
-| `WORKFLOW_POSTGRES_WORKER_CONCURRENCY` | no | Concurrent durable workers. Defaults to `5`. |
+| `WORKFLOW_POSTGRES_WORKER_CONCURRENCY` | no | Concurrent durable workers. Defaults to `50`. Every streaming answer holds one until it ends, and Stop waits for a free one. |
 
 Every secret above also accepts a `_FILE` variant, which is what `compose.yaml` uses:
 `WANIWANI_API_KEY_FILE=/run/secrets/api_key` reads the value out of the file instead of the
