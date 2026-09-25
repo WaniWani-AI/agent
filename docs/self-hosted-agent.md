@@ -60,6 +60,7 @@ and the runtime never calls WaniWani to check it. Two optional headers travel wi
 | --- | --- |
 | `x-waniwani-visitor` | The visitor this request belongs to. Defaults to `anonymous`. |
 | `x-waniwani-extra` | JSON context, passed through to your MCP server as `_meta["waniwani/extra"]`. |
+| `x-waniwani-context` | A JSON object of `_meta` keys, spread into every tool call's `_meta`. It never sets `waniwani/extra`, `waniwani/sessionId`, `waniwani/visitorId`, `waniwani/turnCount`, `waniwani/channelId` or `waniwani/source`, which the runtime derives. The adapter's `runTurn` sends it as `context`. |
 
 Never let the key reach a browser. The visitor header is an assertion by your backend, so the
 runtime trusts it exactly as far as it trusts the key holder.
@@ -78,7 +79,7 @@ minted server-side.
 | `exp` | At most five minutes out. |
 | `jti` | Unique per token. |
 
-`x-waniwani-extra` works on this form too. Every custom claim is a string.
+`x-waniwani-extra` and `x-waniwani-context` work on this form too. Every custom claim is a string.
 
 ## Who may address a session
 
@@ -136,10 +137,12 @@ different one.
 
 | Mode | Endpoint | Key |
 | --- | --- | --- |
-| `managed` | `AI_GATEWAY_BASE_URL`, or the Vercel AI Gateway | `AI_GATEWAY_API_KEY` |
+| `managed` | The Vercel AI Gateway by model slug, or the OpenAI-compatible `AI_GATEWAY_BASE_URL` when set | `AI_GATEWAY_API_KEY`, or the project's OIDC token on Vercel |
 | `byo` | The base URL on the payload | The key on the payload, else `MODEL_API_KEY` |
 
-A missing key fails the turn with a message naming the variable. There is no fallback.
+A missing key fails the turn with a message naming the variable. There is no fallback. A managed
+payload also carries the app's `providerOptions` (reasoning effort and the Gateway's fallback
+chain) and the model's context window, and the runtime passes both to eve.
 
 A self-hosted deployment on its own model sets `MODEL_API_KEY` to that provider's key. A hosted
 runtime has no equivalent, because the org's credential is sealed in the app and the published
@@ -165,7 +168,7 @@ config carries no key, so hosted deployments are on managed inference until a br
 | `WANIWANI_MCP_URL` | no | Overrides the MCP origin the configuration publishes. |
 | `WANIWANI_ANALYTICS` | no | `ingest` reports transcripts to WaniWani, `off` reports nothing. Defaults to `off`, and is refused outright on a runtime serving more than one environment. |
 | `AI_GATEWAY_BASE_URL` | no | Overrides the gateway endpoint. Leave unset in production. |
-| `WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS` | no | Context window the runtime assumes. Defaults to `32000`. |
+| `WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS` | no | Context window for a model whose payload names none, other than a Gateway slug, whose window eve reads from the Gateway catalog. Defaults to `32000`. |
 | `WORKFLOW_POSTGRES_WORKER_CONCURRENCY` | no | Concurrent durable workers. Defaults to `50`. Every streaming answer holds one until it ends, and Stop waits for a free one. |
 
 Every secret above also accepts a `_FILE` variant, which is what `compose.yaml` uses:

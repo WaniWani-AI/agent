@@ -19,12 +19,18 @@ export default defineAgent({
 					auth: ctx.session.auth,
 				});
 				const access = resolveModelAccess(config.model);
+				// Absent, eve reads a Gateway slug's window from the Gateway catalog.
+				const windowTokens =
+					access.contextWindowTokens ??
+					(access.kind === "gateway" ? null : contextWindowTokens);
 				return {
-					model: createOpenAI({
-						baseURL: access.baseUrl,
-						apiKey: access.apiKey,
-					}).chat(access.modelId),
-					modelContextWindowTokens: contextWindowTokens,
+					model:
+						access.kind === "gateway"
+							? access.modelId
+							: createOpenAI({ baseURL: access.baseUrl, apiKey: access.apiKey }).chat(
+									access.modelId,
+								),
+					...(windowTokens ? { modelContextWindowTokens: windowTokens } : {}),
 					...(access.providerOptions
 						? { modelOptions: { providerOptions: access.providerOptions } }
 						: {}),

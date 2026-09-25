@@ -19,6 +19,7 @@ export type UIMessageChunk =
 	| { type: "tool-output-available"; toolCallId: string; output: unknown; dynamic?: boolean }
 	| { type: "tool-output-error"; toolCallId: string; errorText: string; dynamic?: boolean }
 	| { type: "message-metadata"; messageMetadata: Record<string, unknown> }
+	| { type: `data-${string}`; data: unknown; id?: string; transient?: boolean }
 	| { type: "error"; errorText: string };
 
 export type WidgetContext = {

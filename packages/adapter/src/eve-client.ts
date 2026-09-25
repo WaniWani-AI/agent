@@ -44,6 +44,8 @@ export type EveTarget = {
 	credential: Credential;
 	visitorId?: string;
 	extra?: Record<string, unknown>;
+	/** `_meta` keys the caller stamps for the runtime's tool calls. */
+	context?: Record<string, unknown>;
 };
 
 export type EveTurnBody = {
@@ -74,6 +76,14 @@ function sessionPath(sessionId: string, suffix = ""): string {
 	return `/session/${encodeURIComponent(sessionId)}${suffix}`;
 }
 
+/** Header values must be Latin-1, so every other character goes out as a JSON `\u` escape. */
+function jsonHeader(value: Record<string, unknown>): string {
+	return JSON.stringify(value).replace(
+		/[\u007f-\uffff]/g,
+		(char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+	);
+}
+
 async function headersFor(
 	target: EveTarget,
 	sessionId?: string,
@@ -83,7 +93,8 @@ async function headersFor(
 	return {
 		authorization: `Bearer ${bearer}`,
 		...(target.visitorId ? { "x-waniwani-visitor": target.visitorId } : {}),
-		...(target.extra ? { "x-waniwani-extra": JSON.stringify(target.extra) } : {}),
+		...(target.extra ? { "x-waniwani-extra": jsonHeader(target.extra) } : {}),
+		...(target.context ? { "x-waniwani-context": jsonHeader(target.context) } : {}),
 	};
 }
 

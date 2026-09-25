@@ -2,7 +2,12 @@ import type { JsonObject } from "./json.js";
 import { configRequest, type Tenant } from "./tenant.js";
 
 export type SessionModel =
-	| { mode: "managed"; modelId: string }
+	| {
+			mode: "managed";
+			modelId: string;
+			providerOptions?: Record<string, JsonObject> | null;
+			contextWindowTokens?: number | null;
+	  }
 	| {
 			mode: "byo";
 			provider: string;
@@ -59,7 +64,16 @@ function readModel(value: unknown): SessionModel {
 		throw new Error("Agent configuration returned no usable model");
 	}
 	if (model.mode === "managed") {
-		return { mode: "managed", modelId };
+		return {
+			mode: "managed",
+			modelId,
+			providerOptions:
+				(model.providerOptions as Record<string, JsonObject> | null) ?? null,
+			contextWindowTokens:
+				typeof model.contextWindowTokens === "number"
+					? model.contextWindowTokens
+					: null,
+		};
 	}
 	if (model.mode === "byo") {
 		if (typeof model.provider !== "string") {

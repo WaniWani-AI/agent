@@ -59,6 +59,11 @@ export type RunTurnInput = {
 	sessionId?: string;
 	clientContext?: string | string[] | Record<string, unknown>;
 	extra?: Record<string, unknown>;
+	/**
+	 * `_meta` keys the caller stamps from its own authenticated state, such as
+	 * `waniwani/documents`. The runtime keeps the keys it derives itself.
+	 */
+	context?: Record<string, unknown>;
 	signal?: AbortSignal;
 };
 
@@ -78,6 +83,7 @@ export async function runTurn(input: RunTurnInput): Promise<{
 		credential: input.credential,
 		...(input.visitorId ? { visitorId: input.visitorId } : {}),
 		...(input.extra ? { extra: input.extra } : {}),
+		...(input.context ? { context: input.context } : {}),
 	};
 	const body: EveTurnBody = {
 		message: input.message,
