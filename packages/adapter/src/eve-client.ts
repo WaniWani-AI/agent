@@ -184,14 +184,21 @@ async function streamTailIndex(target: EveTarget, sessionId: string): Promise<nu
 		startIndex: "0",
 		includeTailIndex: "1",
 	});
+	const request = new AbortController();
 	const response = await fetch(url, {
 		cache: "no-store",
 		headers: await headersFor(target, sessionId),
+		signal: request.signal,
 	});
-	await response.body?.cancel().catch(() => {});
-	if (!response.ok) throw await failure(response);
-	const tail = Number(response.headers.get("x-eve-stream-tail-index"));
-	return Number.isSafeInteger(tail) ? tail : -1;
+	try {
+		if (!response.ok) throw await failure(response);
+		const tail = Number(response.headers.get("x-eve-stream-tail-index"));
+		return Number.isSafeInteger(tail) ? tail : -1;
+	} finally {
+		// A waiting session's stream never ends, and inside a Next.js route handler
+		// `body.cancel()` on it never settles, so the read is aborted instead.
+		request.abort();
+	}
 }
 
 export async function openEveStream(input: {

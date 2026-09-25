@@ -52,10 +52,6 @@ function parsedExtra(raw: unknown): Record<string, unknown> | undefined {
 	}
 }
 
-/**
- * eve hands a tool resolver an empty `messages` array at `turn.started`, so the
- * turn sequence is what counts this conversation's user messages.
- */
 function turnCountOf(event: unknown): number {
 	const sequence = (event as { data?: { sequence?: unknown } })?.data?.sequence;
 	return typeof sequence === "number" ? sequence + 1 : 1;

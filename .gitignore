@@ -8,3 +8,4 @@ node_modules
 .DS_Store
 *.sw[a-p]
 dist
+.vercel
