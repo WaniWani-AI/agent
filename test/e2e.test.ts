@@ -32,6 +32,14 @@ function base64url(value: string | Buffer): string {
 	return Buffer.from(value).toString("base64url");
 }
 
+/** Header values must be Latin-1, so this mirrors how the adapter escapes a context object. */
+function contextHeader(value: Record<string, unknown>): string {
+	return JSON.stringify(value).replace(
+		/[\u007f-￿]/g,
+		(char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+	);
+}
+
 /**
  * The self-hosted stack proves itself with the environment key it already holds.
  * The hosted stack takes one short-lived HS256 token per visitor.
@@ -349,6 +357,74 @@ onSelfHosted(
 	120_000,
 );
 
+onSelfHosted(
+	"(a3) an x-waniwani-context header passes its own keys through and never overrides a derived one",
+	async () => {
+		await fetch(`${MCP}/_calls`, { method: "DELETE" });
+		const documents = [
+			{ documentId: "doc_1", filename: "résumé_日本語.pdf", mediaType: "application/pdf" },
+		];
+		const geoLocation = { country: "FR", region: "IDF", city: "Paris" };
+		const metadata = { plan: "pro", experiment: "checkout-v2" };
+		const context = {
+			"waniwani/documents": documents,
+			"waniwani/authSource": "embed",
+			"waniwani/userAgent": "Mozilla/5.0 (fixture)",
+			"waniwani/geoLocation": geoLocation,
+			"waniwani/metadata": metadata,
+			// An attempt to overwrite every key the runtime derives itself.
+			"waniwani/extra": { hijacked: true },
+			"waniwani/sessionId": "not-the-real-session",
+			"waniwani/visitorId": "attacker-supplied",
+			"waniwani/turnCount": 999,
+			"waniwani/channelId": "fake-channel",
+			"waniwani/source": "fake-source",
+		};
+
+		const { sessionId } = await startSession("hello", credential(), {
+			"x-waniwani-visitor": "visitor-77",
+			"x-waniwani-context": contextHeader(context),
+		});
+
+		const { calls } = (await (await fetch(`${MCP}/_calls`)).json()) as {
+			calls: Array<{ _meta: Record<string, unknown> | null }>;
+		};
+		const meta = calls[0]?._meta ?? {};
+
+		// Non-Latin-1 characters round-trip through the client's \u-escaping.
+		expect(meta["waniwani/documents"]).toEqual(documents);
+		expect(meta["waniwani/authSource"]).toBe("embed");
+		expect(meta["waniwani/userAgent"]).toBe("Mozilla/5.0 (fixture)");
+		expect(meta["waniwani/geoLocation"]).toEqual(geoLocation);
+		expect(meta["waniwani/metadata"]).toEqual(metadata);
+
+		// The runtime's own values win; none of the header's overwrite attempts land.
+		expect(meta["waniwani/sessionId"]).toBe(sessionId);
+		expect(meta["waniwani/visitorId"]).toBe("visitor-77");
+		expect(meta["waniwani/turnCount"]).toBe(1);
+		expect(meta["waniwani/channelId"]).toBe("33333333-3333-4333-8333-333333333333");
+		expect(meta["waniwani/source"]).toBe("website");
+		expect("waniwani/extra" in meta).toBe(false);
+	},
+	120_000,
+);
+
+onSelfHosted(
+	"(a4) a context header cannot manufacture a visitor the request never carried",
+	async () => {
+		await fetch(`${MCP}/_calls`, { method: "DELETE" });
+		await startSession("hello", credential(), {
+			"x-waniwani-context": contextHeader({ "waniwani/visitorId": "attacker-supplied" }),
+		});
+
+		const { calls } = (await (await fetch(`${MCP}/_calls`)).json()) as {
+			calls: Array<{ _meta: Record<string, unknown> | null }>;
+		};
+		expect("waniwani/visitorId" in (calls[0]?._meta ?? {})).toBe(false);
+	},
+	120_000,
+);
+
 onSelfHosted("(b) a republished prompt reaches the next turn", async () => {
 	const token = credential();
 	const { sessionId } = await startSession("hello", token);
@@ -604,6 +680,35 @@ onHosted(
 		);
 		await bound.body?.cancel().catch(() => {});
 		expect(bound.status).toBe(200);
+	},
+	120_000,
+);
+
+onHosted(
+	"(h3) an x-waniwani-context header reaches the MCP server on the hosted path too",
+	async () => {
+		await fetch(`${MCP}/_calls`, { method: "DELETE" });
+		const context = {
+			"waniwani/authSource": "embed",
+			"waniwani/documents": [
+				{ documentId: "doc_1", filename: "résumé_日本語.pdf", mediaType: "application/pdf" },
+			],
+			// An attempt to overwrite a key the runtime derives itself.
+			"waniwani/sessionId": "not-the-real-session",
+		};
+
+		const { sessionId } = await startSession("hello", credential(), {
+			"x-waniwani-context": contextHeader(context),
+		});
+
+		const { calls } = (await (await fetch(`${MCP}/_calls`)).json()) as {
+			calls: Array<{ _meta: Record<string, unknown> | null }>;
+		};
+		const meta = calls[0]?._meta ?? {};
+
+		expect(meta["waniwani/authSource"]).toBe("embed");
+		expect(meta["waniwani/documents"]).toEqual(context["waniwani/documents"]);
+		expect(meta["waniwani/sessionId"]).toBe(sessionId);
 	},
 	120_000,
 );
