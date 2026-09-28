@@ -35,7 +35,7 @@ function base64url(value: string | Buffer): string {
 /** Header values must be Latin-1, so this mirrors how the adapter escapes a context object. */
 function contextHeader(value: Record<string, unknown>): string {
 	return JSON.stringify(value).replace(
-		/[\u007f-￿]/g,
+		/[\u007f-\uffff]/g,
 		(char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
 	);
 }
