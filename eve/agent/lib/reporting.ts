@@ -93,12 +93,14 @@ export function report(session: Session, events: ReportEvent[]): Promise<boolean
 		if (chains.get(key(session)) === settled) chains.delete(key(session));
 	});
 	for (const event of events) {
-		if (event.kind === "user_message") {
-			userRows.set(key(session, event.turnId), delivered);
-			void settled.then(() => userRows.delete(key(session, event.turnId)));
-		}
+		if (event.kind === "user_message") userRows.set(key(session, event.turnId), delivered);
 	}
 	return delivered;
+}
+
+/** Called once a turn ends: nothing of that turn waits on its user row any more. */
+export function forgetTurn(session: Session & { turnId: string }): void {
+	userRows.delete(key(session, session.turnId));
 }
 
 /** Customer tools report their own analytics and enrichment replays in insert order, so a tool waits for its turn's user row. */

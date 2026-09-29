@@ -2,7 +2,7 @@ import type { SessionAuth } from "eve/context";
 import { defineHook } from "eve/hooks";
 import { isNativeSession } from "../lib/browser-token.js";
 import { GUARDRAIL_BLOCKED } from "../lib/guardrail.js";
-import { report, type UsageStep } from "../lib/reporting.js";
+import { forgetTurn, report, type UsageStep } from "../lib/reporting.js";
 import { waitUntil } from "../lib/wait-until.js";
 
 type Meta = { meta: { id: string; at: string } };
@@ -34,6 +34,7 @@ function endTurn(input: {
 	turnUsage.delete(input.ctx.session.id);
 	stepModels.delete(input.ctx.session.id);
 	if (!session) return;
+	forgetTurn({ ...session, turnId: input.turnId });
 	waitUntil(report(session, [
 		...(steps.length > 0
 			? [

@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { SessionAuthContext } from "eve/context";
 import { extractBearerToken, verifyJwtHmac } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
-import { verifyBrowserToken } from "../lib/browser-token.js";
+import { decodedSegment, verifyBrowserToken } from "../lib/browser-token.js";
 import {
 	GUARDRAIL_BLOCKED,
 	lakeraFlags,
@@ -17,9 +17,10 @@ type Attributes = Readonly<Record<string, string | readonly string[]>>;
 /** `/eve/v1/session/<id>` and everything under it: stream, cancel, clear, compact, reset. */
 const ADDRESSED_SESSION = /^\/eve\/v1\/session\/([^/]+)/;
 
-function addressedSession(request: Request): string | undefined {
+/** A segment that does not decode addresses no session a token could name, so it matches none. */
+function addressedSession(request: Request): string | null | undefined {
 	const match = ADDRESSED_SESSION.exec(new URL(request.url).pathname);
-	return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+	return match?.[1] ? (decodedSegment(match[1]) ?? null) : undefined;
 }
 
 function matches(token: string | null, expected: string): boolean {
@@ -98,7 +99,7 @@ export default eveChannel({
 			// eve authenticates a session-addressed route and authorizes nothing, so
 			// the token has to name the session it is allowed to touch.
 			const addressed = addressedSession(request);
-			if (addressed && sessionAuth.attributes.sid !== addressed) return null;
+			if (addressed !== undefined && sessionAuth.attributes.sid !== addressed) return null;
 
 			return { ...sessionAuth, attributes: withBackendHeaders(request, sessionAuth.attributes) };
 		},

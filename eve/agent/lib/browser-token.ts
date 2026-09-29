@@ -8,6 +8,14 @@ type BrowserOperation = "send" | "stream" | "cancel";
 
 const SESSION_ROUTE = /^\/eve\/v1\/session\/([^/]+)(\/stream|\/cancel)?\/?$/;
 
+export function decodedSegment(segment: string): string | undefined {
+	try {
+		return decodeURIComponent(segment);
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * The only operations a browser token reaches: a message or approval answer to
  * its own session, that session's stream, and cancelling its active turn.
@@ -15,7 +23,7 @@ const SESSION_ROUTE = /^\/eve\/v1\/session\/([^/]+)(\/stream|\/cancel)?\/?$/;
  */
 export function browserOperation(request: Request, sessionId: string): BrowserOperation | undefined {
 	const match = SESSION_ROUTE.exec(new URL(request.url).pathname);
-	if (!match?.[1] || decodeURIComponent(match[1]) !== sessionId) return undefined;
+	if (!match?.[1] || decodedSegment(match[1]) !== sessionId) return undefined;
 	const suffix = match[2];
 	if (request.method === "POST" && suffix === undefined) return "send";
 	if (request.method === "GET" && suffix === "/stream") return "stream";
@@ -39,7 +47,8 @@ export async function verifyBrowserToken(input: {
 	const { attributes } = verified.sessionAuth;
 
 	const sessionId = attributes.sid;
-	if (typeof sessionId !== "string" || typeof attributes.environmentId !== "string") return null;
+	const { environmentId } = attributes;
+	if (typeof sessionId !== "string" || typeof environmentId !== "string" || !environmentId) return null;
 	if (!browserOperation(input.request, sessionId)) return null;
 
 	const region = process.env.WANIWANI_REGION;
