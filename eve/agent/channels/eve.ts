@@ -2,7 +2,15 @@ import { timingSafeEqual } from "node:crypto";
 import type { SessionAuthContext } from "eve/context";
 import { extractBearerToken, verifyJwtHmac } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
-import { ANONYMOUS, credentialForm } from "../lib/tenant.js";
+import { verifyBrowserToken } from "../lib/browser-token.js";
+import {
+	GUARDRAIL_BLOCKED,
+	lakeraFlags,
+	messageText,
+	REFUSAL_CONTEXT,
+} from "../lib/guardrail.js";
+import { publishedNow } from "../lib/published.js";
+import { ANONYMOUS, credentialForm, tenantOf } from "../lib/tenant.js";
 
 type Attributes = Readonly<Record<string, string | readonly string[]>>;
 
@@ -30,7 +38,33 @@ function withBackendHeaders(request: Request, attributes: Attributes): Attribute
 	};
 }
 
+async function guarded(caller: SessionAuthContext, text: string) {
+	if (caller.attributes.purpose !== "browser") return { auth: caller };
+	const instructions = await publishedNow(tenantOf({ current: caller, initiator: caller }))
+		.then((published) => published.config.instructions)
+		.catch(() => undefined);
+	if (!(await lakeraFlags({ text, instructions }))) return { auth: caller };
+	return {
+		auth: { ...caller, attributes: { ...caller.attributes, guardrail: GUARDRAIL_BLOCKED } },
+		context: [REFUSAL_CONTEXT],
+	};
+}
+
 export default eveChannel({
+	// Browser tokens are what authorize; `verifyBrowserToken` also holds each one
+	// to the origin the app issued it for.
+	cors: {
+		origin: "*",
+		methods: ["GET", "POST"],
+		allowedHeaders: ["authorization", "content-type"],
+		exposedHeaders: [
+			"x-eve-session-id",
+			"x-eve-stream-format",
+			"x-eve-stream-tail-index",
+			"x-eve-stream-version",
+		],
+		maxAge: 600,
+	},
 	auth: [
 		async (request): Promise<SessionAuthContext | null> => {
 			const token = extractBearerToken(request.headers.get("authorization"));
@@ -48,11 +82,15 @@ export default eveChannel({
 				};
 			}
 
+			const secret = process.env.WANIWANI_AGENT_SECRET ?? "";
+			const browser = await verifyBrowserToken({ token, request, secret });
+			if (browser) return browser;
+
 			const verified = await verifyJwtHmac(token, {
 				algorithm: "HS256",
 				audiences: ["waniwani-agent-runtime"],
 				issuer: "waniwani:agent",
-				secret: process.env.WANIWANI_AGENT_SECRET ?? "",
+				secret,
 			});
 			if (!verified.ok) return null;
 			const { sessionAuth } = verified;
@@ -65,4 +103,6 @@ export default eveChannel({
 			return { ...sessionAuth, attributes: withBackendHeaders(request, sessionAuth.attributes) };
 		},
 	],
+	onMessage: (ctx, message) =>
+		ctx.eve.caller ? guarded(ctx.eve.caller, messageText(message)) : { auth: null },
 });

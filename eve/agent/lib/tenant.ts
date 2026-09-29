@@ -139,20 +139,31 @@ function serviceToken(): string {
 	return `${header}.${payload}.${base64url(signature)}`;
 }
 
+export function appBaseUrl(): string {
+	return process.env.WANIWANI_API_URL || "https://app.waniwani.ai";
+}
+
+/** A hosted runtime speaks to the app for one environment at a time, with its service token. */
+export function serviceRequest(input: { environmentId: string; path: string }): {
+	url: string;
+	authorization: string;
+} {
+	return {
+		url: `${appBaseUrl()}${input.path}?environmentId=${encodeURIComponent(input.environmentId)}`,
+		authorization: `Bearer ${serviceToken()}`,
+	};
+}
+
 export function configRequest(tenant: Tenant): {
 	url: string;
 	authorization: string;
 } {
-	const base = process.env.WANIWANI_API_URL || "https://app.waniwani.ai";
-	const path = `${base}/api/mcp/agent/config`;
+	const path = `${appBaseUrl()}/api/mcp/agent/config`;
 
 	if (!tenant.environmentId) {
 		const apiKey = process.env.WANIWANI_API_KEY;
 		if (!apiKey) throw new Error("WANIWANI_API_KEY is not set");
 		return { url: path, authorization: `Bearer ${apiKey}` };
 	}
-	return {
-		url: `${path}?environmentId=${encodeURIComponent(tenant.environmentId)}`,
-		authorization: `Bearer ${serviceToken()}`,
-	};
+	return serviceRequest({ environmentId: tenant.environmentId, path: "/api/mcp/agent/config" });
 }
