@@ -27,6 +27,7 @@ const state = {
 };
 
 const events: unknown[] = [];
+const reports: { sessionId: string; environmentId: string; events: { eventId: string; kind: string; turnId: string }[] }[] = [];
 
 /** Mirrors the app: an environment key, or a service token this region trusts. */
 function authorized(header: string | undefined): boolean {
@@ -70,6 +71,7 @@ app.post("/_control", (request, response) => {
 });
 
 app.get("/_events", (_request, response) => response.json({ events }));
+app.get("/_reports", (_request, response) => response.json({ reports }));
 
 app.use((request, response, next) => {
 	if (request.path.startsWith("/_")) return next();
@@ -97,6 +99,21 @@ app.get("/api/mcp/agent/config", (request, response) => {
 app.post("/api/mcp/events/v2/batch", (request, response) => {
 	events.push(request.body);
 	response.json({ success: true, message: "success", data: { accepted: 1 } });
+});
+
+app.post("/api/mcp/agent/events", (request, response) => {
+	const environmentId = String(request.query.environmentId ?? "");
+	const { sessionId, events: batch, barrier } = request.body ?? {};
+	if (barrier) {
+		const stored = reports.some(
+			(entry) =>
+				entry.sessionId === sessionId &&
+				entry.events.some((event) => event.kind === "user_message" && event.turnId === barrier.turnId),
+		);
+		return response.json({ success: true, message: "success", data: { stored } });
+	}
+	reports.push({ sessionId, environmentId, events: batch ?? [] });
+	response.json({ success: true, message: "success", data: { accepted: (batch ?? []).length } });
 });
 
 app.listen(PORT, () => console.log(`[fixture app] listening on ${PORT}`));
