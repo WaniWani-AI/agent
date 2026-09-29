@@ -6,8 +6,9 @@ import { holdSnapshot, releaseSnapshot } from "../lib/turn-snapshot.js";
 
 /**
  * The gate: eve runs hooks before every resolver, so everything downstream reads
- * the snapshot this leaves behind. A throw here ends the session rather than the
- * turn, which is the eve 0.52.2 behaviour the README records.
+ * the snapshot this leaves behind. eve only logs a throw from a hook, so a turn
+ * that fails here holds no snapshot, and the resolvers that rebuild it through
+ * the same checks fail the turn.
  */
 export default defineHook({
 	events: {

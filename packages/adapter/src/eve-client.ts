@@ -157,15 +157,22 @@ export async function createEveSession(
 	return sessionId;
 }
 
-/** Submit a follow-up with an explicit interrupt policy and a correlated response. */
+/**
+ * Submit a follow-up with an explicit interrupt policy and a correlated response.
+ * `from` is a stream position the caller already consumed up to; with it, the
+ * stream is read from there and filtered by the delivery id, so the tail read
+ * is skipped. Any position at or before the tail is safe, since events that
+ * belong to other deliveries are dropped.
+ */
 export async function continueEveSession(
 	target: EveTarget,
 	sessionId: string,
 	body: EveTurnBody,
+	from?: number,
 ): Promise<EveDelivery & { deliveryId: string }> {
 	let delay = BASE_DELAY_MS;
 	for (let attempt = 1; ; attempt += 1) {
-		const tail = await streamTailIndex(target, sessionId);
+		const startIndex = from ?? (await streamTailIndex(target, sessionId)) + 1;
 		try {
 			const response = await postTurn(
 				target, sessionPath(sessionId), { ...body, turnPolicy: "steer" }, sessionId,
@@ -174,7 +181,7 @@ export async function continueEveSession(
 			if (typeof accepted.deliveryId !== "string" || !accepted.deliveryId.trim()) {
 				throw new EveError(0, "Runtime returned no delivery id; update Eve before continuing sessions");
 			}
-			return { startIndex: tail + 1, deliveryId: accepted.deliveryId };
+			return { startIndex, deliveryId: accepted.deliveryId };
 		} catch (error) {
 			const again =
 				error instanceof EveError && error.status === 409 && attempt < SEND_ATTEMPTS;
@@ -218,6 +225,8 @@ export async function openEveStream(input: {
 	startIndex: number;
 	deliveryId?: string;
 	onEvent?: (event: EveEvent) => void;
+	/** The position after the last line read, whether its event was kept or filtered out. */
+	onPosition?: (next: number) => void;
 	signal?: AbortSignal;
 }): Promise<ReadableStream<EveEvent>> {
 	const { target, sessionId, startIndex, signal } = input;
@@ -236,7 +245,14 @@ export async function openEveStream(input: {
 			headers: await headersFor(target, sessionId),
 			...(signal ? { signal } : {}),
 		});
-		if (response.ok && response.body) return ndjson(response.body, input.deliveryId, input.onEvent);
+		if (response.ok && response.body) {
+			return ndjson(response.body, {
+				startIndex,
+				deliveryId: input.deliveryId,
+				onEvent: input.onEvent,
+				onPosition: input.onPosition,
+			});
+		}
 		last = await failure(response);
 		if (!RETRYABLE.has(response.status)) throw last;
 		await sleep(delay, signal);
@@ -264,9 +280,15 @@ export async function cancelEveTurn(
 /** One event per line, ending only at the submitted message's own boundary. */
 function ndjson(
 	body: ReadableStream<Uint8Array>,
-	deliveryId?: string,
-	onEvent?: (event: EveEvent) => void,
+	options: {
+		startIndex: number;
+		deliveryId?: string;
+		onEvent?: (event: EveEvent) => void;
+		onPosition?: (next: number) => void;
+	},
 ): ReadableStream<EveEvent> {
+	const { deliveryId, onEvent, onPosition } = options;
+	let position = options.startIndex;
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
@@ -291,6 +313,8 @@ function ndjson(
 						continue;
 					}
 					const event = JSON.parse(line) as EveEvent;
+					position += 1;
+					onPosition?.(position);
 					if (deliveryId !== undefined) {
 						// Mirror Eve's delivery filter, including session-wide terminal errors.
 						const matches = event.meta?.deliveryIds?.includes(deliveryId) === true;

@@ -57,6 +57,11 @@ export type RunTurnInput = {
 	message: string;
 	/** Continues that session. Absent, the turn opens a new one. */
 	sessionId?: string;
+	/**
+	 * The previous turn's `cursor()`, for a continuation. It spares a read of the
+	 * stream's tail before submitting; absent, the tail is read.
+	 */
+	cursor?: number;
 	clientContext?: string | string[] | Record<string, unknown>;
 	extra?: Record<string, unknown>;
 	/**
@@ -74,9 +79,12 @@ export type RunTurnInput = {
  */
 export async function runTurn(input: RunTurnInput): Promise<{
 	sessionId: string;
+	/** Attaches to the session stream on first read; a failure to attach errors the stream. */
 	chunks: ReadableStream<UIMessageChunk>;
 	/** Stop this response's turn without cancelling a newer message. */
 	cancel: () => Promise<void>;
+	/** The stream position this response has read up to, for the next turn's `cursor`. */
+	cursor: () => number;
 }> {
 	const target: EveTarget = {
 		eveUrl: input.eveUrl,
@@ -99,8 +107,9 @@ export async function runTurn(input: RunTurnInput): Promise<{
 	const continuing = input.sessionId;
 	const sessionId = continuing ?? (await createEveSession(target, body));
 	const delivery: EveDelivery = continuing
-		? await continueEveSession(target, continuing, body)
+		? await continueEveSession(target, continuing, body, input.cursor)
 		: { startIndex: 0 };
+	let position = delivery.startIndex;
 	let turnId: string | undefined;
 	let ownsCancellation = false;
 	const observe = (event: EveEvent): void => {
@@ -137,17 +146,61 @@ export async function runTurn(input: RunTurnInput): Promise<{
 		if (turnId && ownsCancellation) await cancelEveTurn(target, sessionId, turnId, signal);
 	})();
 
-	const events = await openEveStream({
-		target,
-		sessionId,
-		...delivery,
-		onEvent: observe,
-		...(input.signal ? { signal: input.signal } : {}),
-	}).catch(async (error: unknown) => {
+	if (input.signal?.aborted) {
 		await cancel().catch(() => {});
-		throw error;
+		throw input.signal.reason;
+	}
+
+	// Returned before the stream is attached, so a caller can answer as soon as
+	// the runtime has accepted the turn.
+	let reader: ReadableStreamDefaultReader<EveEvent> | undefined;
+	const attachment = new AbortController();
+	const events = new ReadableStream<EveEvent>({
+		async pull(controller) {
+			try {
+				reader ??= (
+					await openEveStream({
+						target,
+						sessionId,
+						...delivery,
+						onEvent: observe,
+						onPosition: (next) => {
+							position = next;
+						},
+						signal: input.signal
+							? AbortSignal.any([input.signal, attachment.signal])
+							: attachment.signal,
+					})
+				).getReader();
+			} catch (error) {
+				if (attachment.signal.aborted) return;
+				await cancel().catch(() => {});
+				controller.error(error);
+				return;
+			}
+			if (attachment.signal.aborted) {
+				await reader.cancel(attachment.signal.reason).catch(() => {});
+				return;
+			}
+			try {
+				const next = await reader.read();
+				if (next.done) controller.close();
+				else controller.enqueue(next.value);
+			} catch (error) {
+				controller.error(error);
+			}
+		},
+		cancel(reason) {
+			attachment.abort(reason);
+			return reader?.cancel(reason);
+		},
 	});
-	return { sessionId, chunks: events.pipeThrough(uiMessageChunks()), cancel };
+	return {
+		sessionId,
+		chunks: events.pipeThrough(uiMessageChunks()),
+		cancel,
+		cursor: () => position,
+	};
 }
 
 export async function cancelTurn(input: {
