@@ -77,8 +77,11 @@ export function firstTokenTimeout(options: { timeoutMs: number; attempts: number
 				const timer = setTimeout(() => deadline.abort(new FirstTokenTimeoutError(timeoutMs, attempt)), timeoutMs);
 				const signal = caller ? AbortSignal.any([caller, deadline.signal]) : deadline.signal;
 				let release: (() => Promise<void>) | undefined;
+				const streaming = Promise.resolve(model.doStream({ ...params, abortSignal: signal }));
+				// Orphaned when the deadline wins, and it rejects once the abort lands.
+				streaming.catch(() => {});
 				try {
-					const result = await Promise.race([model.doStream({ ...params, abortSignal: signal }), timedOut]);
+					const result = await Promise.race([streaming, timedOut]);
 					const reader: Reader = result.stream.getReader();
 					release = () => reader.cancel();
 					const buffered: StreamPart[] = [];
