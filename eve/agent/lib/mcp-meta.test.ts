@@ -41,16 +41,25 @@ describe("the runtime-derived keys with nothing from context", () => {
 		expect(result["waniwani/source"]).toBe("unknown");
 	});
 
-	test("a channel with no label carries channelId and the unknown source", () => {
-		const result = mcpMeta(base({ channel: { id: "chan_2", label: null } }));
+	test("a channel with no label carries channelId and its type as the source", () => {
+		const result = mcpMeta(
+			base({ channel: { id: "chan_2", label: null, type: "web" } }),
+		);
 		expect(result["waniwani/channelId"]).toBe("chan_2");
+		expect(result["waniwani/source"]).toBe("web");
+	});
+
+	test("a channel with neither label nor type carries the unknown source", () => {
+		const result = mcpMeta(base({ channel: { id: "chan_2", label: null } }));
 		expect(result["waniwani/source"]).toBe("unknown");
 	});
 
-	test("a blank label reads as unknown, and a label is trimmed", () => {
+	test("a blank label falls back to the type, and a label is trimmed", () => {
 		expect(
-			mcpMeta(base({ channel: { id: "chan_3", label: "  " } }))["waniwani/source"],
-		).toBe("unknown");
+			mcpMeta(base({ channel: { id: "chan_3", label: "  ", type: "chatgpt" } }))[
+				"waniwani/source"
+			],
+		).toBe("chatgpt");
 		expect(
 			mcpMeta(base({ channel: { id: "chan_3", label: " Website " } }))["waniwani/source"],
 		).toBe("Website");

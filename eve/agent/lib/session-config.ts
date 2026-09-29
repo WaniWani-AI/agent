@@ -22,6 +22,7 @@ export type SessionChannel = {
 	id: string;
 	label: string | null;
 	title: string | null;
+	type: string | null;
 };
 
 export type SessionConfig = {
@@ -111,6 +112,7 @@ function readChannels(value: unknown): SessionChannel[] {
 						id: channel.id,
 						label: channel.label ?? null,
 						title: channel.title ?? null,
+						type: channel.type ?? null,
 					},
 				]
 			: [];

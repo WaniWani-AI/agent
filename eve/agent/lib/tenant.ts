@@ -9,6 +9,8 @@ const SERVICE_TOKEN_LIFETIME_SECONDS = 60;
 
 export type Tenant = { key: string; environmentId?: string };
 
+export type ChannelSource = { id: string; label: string | null; type?: string | null };
+
 /** Which credential this deployment accepts, decided once by the environment. */
 export type CredentialForm = "self-hosted" | "hosted";
 
@@ -57,8 +59,8 @@ export function tenantOf(auth: SessionAuth | undefined): Tenant {
  */
 export function resolveChannel(input: {
 	auth: SessionAuth | undefined;
-	channels: readonly { id: string; label: string | null }[];
-}): { id: string; label: string | null } | undefined {
+	channels: readonly ChannelSource[];
+}): ChannelSource | undefined {
 	if (credentialForm() === "hosted") {
 		const claimed = attribute(input.auth, "channelId");
 		return claimed

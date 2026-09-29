@@ -1,5 +1,5 @@
 import type { McpMeta } from "./mcp-catalog.js";
-import { ANONYMOUS } from "./tenant.js";
+import { ANONYMOUS, type ChannelSource } from "./tenant.js";
 
 /** Keys the runtime derives or owns, which a caller's context header never sets. */
 const DERIVED_KEYS = new Set([
@@ -32,7 +32,7 @@ export function mcpMeta(input: {
 	sessionId: string;
 	visitorId: string | undefined;
 	turnCount: number;
-	channel: { id: string; label: string | null } | undefined;
+	channel: ChannelSource | undefined;
 	extraHeader: unknown;
 	contextHeader: unknown;
 }): McpMeta {
@@ -53,6 +53,6 @@ export function mcpMeta(input: {
 			: {}),
 		"waniwani/turnCount": input.turnCount,
 		...(channel ? { "waniwani/channelId": channel.id } : {}),
-		"waniwani/source": channel?.label?.trim() || "unknown",
+		"waniwani/source": channel?.label?.trim() || channel?.type || "unknown",
 	};
 }
