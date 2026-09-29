@@ -35,14 +35,17 @@ calls in process.
 
 ```ts
 mintSessionToken({ secret, sub, environmentId?, channelId?, sid? }): Promise<string>
-runTurn({ eveUrl, credential, visitorId?, message, sessionId?, clientContext?, extra?, context?, signal? })
+runTurn({ eveUrl, credential, visitorId?, message, sessionId?, cursor?, clientContext?, extra?, context?, signal? })
 cancelTurn({ eveUrl, credential, sessionId }): Promise<void>
 runtimeHealth({ eveUrl, credential }): Promise<unknown>
 encodeSse(chunks): ReadableStream<Uint8Array>
 ```
 
-`runTurn` answers `{ sessionId, chunks, cancel }` as soon as the runtime has taken the turn, and the
-chunks arrive as the model writes them. `credential` is the environment key on a self-hosted
+`runTurn` answers `{ sessionId, chunks, cancel, cursor }` as soon as the runtime has accepted the
+turn; `chunks` attaches to the session stream on first read, and the chunks arrive as the model writes
+them. Store `cursor()` once a response ends and pass it as the next turn's `cursor`: the continuation
+then reads the stream from there instead of reading its tail first. Any stored position is safe,
+because events of other deliveries are filtered out. `credential` is the environment key on a self-hosted
 deployment. On the hosted one it is a function, because a hosted token names the session it may
 address and the adapter only learns that id after the session exists. Call the returned
 `cancel()` for disconnect cleanup: it targets only that response's turn. The standalone
@@ -200,8 +203,8 @@ npm view @waniwani/agent-adapter dist-tags
 ## Hosted on Vercel
 
 WaniWani runs the hosted form as the Vercel project `agent-staging` in the `waniwani` team, one
-function region (iad1), Git-connected to `main` with Root Directory `eve`. `eve build` writes
-`.vercel/output` there, and `agent.ts` leaves the Workflow world to eve, which picks Vercel
+function region (iad1), Git-connected to `main` with Root Directory `eve`, where `vercel.json`
+selects Vercel's `eve` framework preset. `eve build` writes `.vercel/output` there, and `agent.ts` leaves the Workflow world to eve, which picks Vercel
 Workflow. Everywhere else it selects the Postgres world.
 
 Production carries no Deployment Protection, because the channel checks the visitor JWT on every
@@ -226,7 +229,7 @@ tag.
 
 ## Pins
 
-`eve@0.66.3`, `@workflow/world-postgres@5.0.0-beta.46`, `ai@7.0.114`, `@ai-sdk/openai@4.0.75`,
+`eve@0.68.0`, `@workflow/world-postgres@5.0.0-beta.47`, `ai@7.0.114`, `@ai-sdk/openai@4.0.75`,
 `just-bash@3.4.2`, `@modelcontextprotocol/sdk@1.30.0`, `jose@6.1.0`, Node 24.
 
 The runtime image builds from `node:24-trixie-slim`, Debian 13, pinned by digest so that rebuilding

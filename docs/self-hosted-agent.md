@@ -169,6 +169,8 @@ config carries no key, so hosted deployments are on managed inference until a br
 | `WANIWANI_ANALYTICS` | no | `ingest` reports transcripts to WaniWani, `off` reports nothing. Defaults to `off`, and is refused outright on a runtime serving more than one environment. |
 | `AI_GATEWAY_BASE_URL` | no | Overrides the gateway endpoint. Leave unset in production. |
 | `WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS` | no | Context window for a model whose payload names none, other than a Gateway slug, whose window eve reads from the Gateway catalog. Defaults to `32000`. |
+| `WANIWANI_MODEL_FIRST_TOKEN_TIMEOUT_MS` | no | How long a model call may go without producing output before it is aborted and made again. Defaults to `15000`. |
+| `WANIWANI_MODEL_FIRST_TOKEN_ATTEMPTS` | no | Attempts at one model call before it fails on that timeout. Defaults to `2`. |
 | `WORKFLOW_POSTGRES_WORKER_CONCURRENCY` | no | Concurrent durable workers. Defaults to `50`. Every streaming answer holds one until it ends, and Stop waits for a free one. |
 
 Every secret above also accepts a `_FILE` variant, which is what `compose.yaml` uses:

@@ -1,11 +1,15 @@
 import { createOpenAI } from "@ai-sdk/openai";
+import { gateway, wrapLanguageModel } from "ai";
 import { defineAgent, defineDynamic } from "eve";
+import { firstTokenTimeout, firstTokenTimeoutFromEnv } from "./lib/first-token-timeout.js";
 import { resolveModelAccess } from "./lib/model.js";
 import { snapshotFor } from "./lib/turn-snapshot.js";
 
 const contextWindowTokens = Number(
 	process.env.WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS || 32_000,
 );
+
+const firstToken = firstTokenTimeout(firstTokenTimeoutFromEnv());
 
 export default defineAgent({
 	defaultTools: false,
@@ -23,13 +27,14 @@ export default defineAgent({
 				const windowTokens =
 					access.contextWindowTokens ??
 					(access.kind === "gateway" ? null : contextWindowTokens);
+				const model =
+					access.kind === "gateway"
+						? gateway(access.modelId)
+						: createOpenAI({ baseURL: access.baseUrl, apiKey: access.apiKey }).chat(access.modelId);
 				return {
-					model:
-						access.kind === "gateway"
-							? access.modelId
-							: createOpenAI({ baseURL: access.baseUrl, apiKey: access.apiKey }).chat(
-									access.modelId,
-								),
+					// A wrapped Gateway model keeps provider `gateway` and its slug, so eve still
+					// reads its context window from the Gateway catalog.
+					model: wrapLanguageModel({ model, middleware: firstToken }),
 					...(windowTokens ? { modelContextWindowTokens: windowTokens } : {}),
 					...(access.providerOptions
 						? { modelOptions: { providerOptions: access.providerOptions } }
