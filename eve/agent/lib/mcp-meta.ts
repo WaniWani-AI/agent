@@ -53,6 +53,6 @@ export function mcpMeta(input: {
 			: {}),
 		"waniwani/turnCount": input.turnCount,
 		...(channel ? { "waniwani/channelId": channel.id } : {}),
-		...(channel?.label ? { "waniwani/source": channel.label } : {}),
+		"waniwani/source": channel?.label?.trim() || "unknown",
 	};
 }

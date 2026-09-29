@@ -35,16 +35,25 @@ describe("the runtime-derived keys with nothing from context", () => {
 		expect("waniwani/visitorId" in unauthenticated).toBe(false);
 	});
 
-	test("no channel carries neither channelId nor source", () => {
+	test("no channel carries no channelId and the unknown source", () => {
 		const result = mcpMeta(base({ channel: undefined }));
 		expect("waniwani/channelId" in result).toBe(false);
-		expect("waniwani/source" in result).toBe(false);
+		expect(result["waniwani/source"]).toBe("unknown");
 	});
 
-	test("a channel with no label carries channelId but no source", () => {
+	test("a channel with no label carries channelId and the unknown source", () => {
 		const result = mcpMeta(base({ channel: { id: "chan_2", label: null } }));
 		expect(result["waniwani/channelId"]).toBe("chan_2");
-		expect("waniwani/source" in result).toBe(false);
+		expect(result["waniwani/source"]).toBe("unknown");
+	});
+
+	test("a blank label reads as unknown, and a label is trimmed", () => {
+		expect(
+			mcpMeta(base({ channel: { id: "chan_3", label: "  " } }))["waniwani/source"],
+		).toBe("unknown");
+		expect(
+			mcpMeta(base({ channel: { id: "chan_3", label: " Website " } }))["waniwani/source"],
+		).toBe("Website");
 	});
 
 	test("turnCount 0 is kept, not treated as absent", () => {
@@ -170,7 +179,7 @@ describe("contextHeader parsing", () => {
 		});
 		expect("waniwani/visitorId" in result).toBe(false);
 		expect("waniwani/channelId" in result).toBe(false);
-		expect("waniwani/source" in result).toBe(false);
+		expect(result["waniwani/source"]).toBe("unknown");
 		expect("waniwani/extra" in result).toBe(false);
 		// A key the runtime does not own passes through even in this anonymous case.
 		expect(result["waniwani/metadata"]).toEqual({ plan: "pro" });
