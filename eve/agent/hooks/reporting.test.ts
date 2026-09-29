@@ -264,117 +264,196 @@ async function runSteps(ctx: unknown, turnId: string, prefix: string): Promise<v
 	await on("step.completed")(stepCompleted(`${prefix}_c2`, turnId, { usage: { inputTokens: 200 } }, 1), ctx);
 }
 
-const EXPECTED_STEPS = [
-	{
-		modelId: "openai/gpt-5-mini",
-		inputTokens: 120,
-		outputTokens: 30,
-		cacheReadTokens: 64,
-		costUsd: 0.0012,
-		generationId: "gen_1",
-	},
-	{ modelId: "anthropic/claude-haiku", inputTokens: 200, outputTokens: 0, cacheReadTokens: 0 },
-];
+const FIRST_STEP = {
+	modelId: "openai/gpt-5-mini",
+	inputTokens: 120,
+	outputTokens: 30,
+	cacheReadTokens: 64,
+	costUsd: 0.0012,
+	generationId: "gen_1",
+};
+const SECOND_STEP = { modelId: "anthropic/claude-haiku", inputTokens: 200, outputTokens: 0, cacheReadTokens: 0 };
 
-describe("usage at turn end", () => {
-	for (const type of ["turn.completed", "turn.cancelled"] as const) {
-		test(`${type} reports the turn's steps as one usage event`, async () => {
-			const ctx = nativeCtx();
-			await runSteps(ctx, "turn_u", type);
-			await settle(50);
-			expect(reported).toHaveLength(0);
-			await on(type)(turnEnd(type, `${type}_end`, "turn_u"), ctx);
-			await waitForEvents(1);
-			await settle(50);
-			const events = allEvents();
-			expect(events).toHaveLength(1);
-			expect(events[0]?.kind).toBe("usage");
-			expect(events[0]?.turnId).toBe("turn_u");
-			expect(String(events[0]?.eventId).startsWith(`eve_${type}_end`)).toBe(true);
-			expect(events[0]?.steps).toEqual(EXPECTED_STEPS);
-		});
-	}
+function usageEvents(): Record<string, unknown>[] {
+	return allEvents().filter((event) => event.kind === "usage");
+}
 
-	test("turn.failed reports the usage and an error event", async () => {
+describe("usage per model call", () => {
+	test("each step.completed with usage reports one usage event holding only that call", async () => {
 		const ctx = nativeCtx();
-		await runSteps(ctx, "turn_f", "failed");
-		await on("turn.failed")(
-			turnEnd("turn.failed", "failed_end", "turn_f", { code: "model_error", message: "upstream exploded" }),
-			ctx,
-		);
+		await runSteps(ctx, "turn_u", "per");
 		await waitForEvents(2);
 		await settle(50);
 		const events = allEvents();
-		const usage = events.find((event) => event.kind === "usage");
-		const error = events.find((event) => event.kind === "error");
-		expect(usage?.steps).toEqual(EXPECTED_STEPS);
-		expect(error?.message).toBe("upstream exploded");
-		expect(error?.turnId).toBe("turn_f");
-		expect(String(error?.eventId).startsWith("eve_failed_end")).toBe(true);
-		expect(usage?.eventId).not.toBe(error?.eventId);
 		expect(events).toHaveLength(2);
+		const first = events.find((event) => event.eventId === "eve_per_c1");
+		const second = events.find((event) => event.eventId === "eve_per_c2");
+		expect(first?.kind).toBe("usage");
+		expect(first?.turnId).toBe("turn_u");
+		expect(first?.steps).toEqual([FIRST_STEP]);
+		expect(second?.kind).toBe("usage");
+		expect(second?.turnId).toBe("turn_u");
+		expect(second?.steps).toEqual([SECOND_STEP]);
+		expect(reported.every((entry) => entry.sessionId === ctx.session.id)).toBe(true);
+		expect(reported.every((entry) => entry.environmentId === "env_hook")).toBe(true);
 	});
 
-	test("turn.failed with no steps still reports the error", async () => {
+	test("the usage is reported before the turn ends", async () => {
 		const ctx = nativeCtx();
-		await on("turn.failed")(turnEnd("turn.failed", "f_only", "turn_x", { code: "boom", message: "no model" }), ctx);
+		await on("step.started")(stepStarted("early_s1", "turn_e", "openai/gpt-5"), ctx);
+		await on("step.completed")(stepCompleted("early_c1", "turn_e", { usage: { inputTokens: 9 } }), ctx);
 		await waitForEvents(1);
-		await settle(50);
-		expect(allEvents().map((event) => event.kind)).toEqual(["error"]);
+		expect(allEvents()[0]?.eventId).toBe("eve_early_c1");
 	});
 
-	test("a second turn reports only its own steps", async () => {
+	test("a step.completed with no usage reports nothing", async () => {
+		const ctx = nativeCtx();
+		await on("step.started")(stepStarted("nu_s1", "turn_n", "openai/gpt-5"), ctx);
+		await on("step.completed")(stepCompleted("nu_c1", "turn_n", {}), ctx);
+		await settle();
+		expect(reported).toHaveLength(0);
+	});
+
+	test("missing token counts default to 0 and absent cost and generation id leave no keys", async () => {
+		const ctx = nativeCtx();
+		await on("step.started")(stepStarted("z_s1", "turn_z", "openai/gpt-5"), ctx);
+		await on("step.completed")(stepCompleted("z_c1", "turn_z", { usage: {} }), ctx);
+		await waitForEvents(1);
+		expect(allEvents()[0]?.steps).toEqual([
+			{ modelId: "openai/gpt-5", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
+		]);
+	});
+
+	test("a zero cost is still reported", async () => {
+		const ctx = nativeCtx();
+		await on("step.started")(stepStarted("free_s1", "turn_free", "openai/gpt-5"), ctx);
+		await on("step.completed")(
+			stepCompleted("free_c1", "turn_free", { usage: { inputTokens: 1, outputTokens: 1, costUsd: 0 } }),
+			ctx,
+		);
+		await waitForEvents(1);
+		expect(allEvents()[0]?.steps).toEqual([
+			{ modelId: "openai/gpt-5", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, costUsd: 0 },
+		]);
+	});
+
+	test("the model comes from the step.started right before, even across turns", async () => {
 		const ctx = nativeCtx();
 		await runSteps(ctx, "turn_a", "first");
 		await on("turn.completed")(turnEnd("turn.completed", "first_end", "turn_a"), ctx);
-		await waitForEvents(1);
 		await on("step.started")(stepStarted("second_s1", "turn_b", "openai/gpt-5"), ctx);
 		await on("step.completed")(
 			stepCompleted("second_c1", "turn_b", { usage: { inputTokens: 5, outputTokens: 6, cacheReadTokens: 7 } }),
 			ctx,
 		);
-		await on("turn.completed")(turnEnd("turn.completed", "second_end", "turn_b"), ctx);
-		await waitForEvents(2);
-		const second = allEvents().find((event) => event.turnId === "turn_b");
-		expect(second?.steps).toEqual([{ modelId: "openai/gpt-5", inputTokens: 5, outputTokens: 6, cacheReadTokens: 7 }]);
+		await waitForEvents(3);
+		await settle(50);
+		const second = allEvents().filter((event) => event.turnId === "turn_b");
+		expect(second).toHaveLength(1);
+		expect(second[0]?.eventId).toBe("eve_second_c1");
+		expect(second[0]?.steps).toEqual([{ modelId: "openai/gpt-5", inputTokens: 5, outputTokens: 6, cacheReadTokens: 7 }]);
 	});
 
-	test("two sessions' steps never mix", async () => {
+	test("two sessions' models never mix", async () => {
 		const one = nativeCtx();
 		const two = nativeCtx();
 		await on("step.started")(stepStarted("x_s1", "turn_1", "model/one"), one);
 		await on("step.started")(stepStarted("y_s1", "turn_1", "model/two"), two);
 		await on("step.completed")(stepCompleted("x_c1", "turn_1", { usage: { inputTokens: 1 } }), one);
 		await on("step.completed")(stepCompleted("y_c1", "turn_1", { usage: { inputTokens: 2 } }), two);
-		await on("turn.completed")(turnEnd("turn.completed", "x_end", "turn_1"), one);
-		await waitForEvents(1);
+		await waitForEvents(2);
 		await settle(50);
 		expect(eventsForSession(one.session.id)).toHaveLength(1);
 		expect(eventsForSession(one.session.id)[0]?.steps).toEqual([
 			{ modelId: "model/one", inputTokens: 1, outputTokens: 0, cacheReadTokens: 0 },
 		]);
-		expect(eventsForSession(two.session.id)).toHaveLength(0);
+		expect(eventsForSession(two.session.id)).toHaveLength(1);
+		expect(eventsForSession(two.session.id)[0]?.steps).toEqual([
+			{ modelId: "model/two", inputTokens: 2, outputTokens: 0, cacheReadTokens: 0 },
+		]);
 	});
 
-	test("a server-token session reports no usage", async () => {
+	test("a redelivered step.completed carries the same event id", async () => {
+		const ctx = nativeCtx();
+		const start = stepStarted("r_s1", "turn_r", "openai/gpt-5");
+		const done = stepCompleted("r_c1", "turn_r", { usage: { inputTokens: 3 } });
+		await on("step.started")(start, ctx);
+		await on("step.completed")(done, ctx);
+		await on("step.started")(start, ctx);
+		await on("step.completed")(done, ctx);
+		await waitForEvents(2);
+		expect(usageEvents().map((event) => event.eventId)).toEqual(["eve_r_c1", "eve_r_c1"]);
+	});
+
+	test("a session a server token started reports no usage", async () => {
 		const ctx = serverCtx();
 		await runSteps(ctx, "turn_s", "server");
-		await on("turn.completed")(turnEnd("turn.completed", "server_end", "turn_s"), ctx);
-		await on("turn.failed")(turnEnd("turn.failed", "server_fail", "turn_s", { code: "x", message: "y" }), ctx);
 		await settle();
 		expect(reported).toHaveLength(0);
 	});
 
-	test("the usage event keeps the same id on redelivery of the turn end", async () => {
+	test("a native caller on a session a server token started reports no usage", async () => {
+		const ctx = nativeCtx({ current: NATIVE, initiator: { environmentId: "env_hook", sid: "x" } });
+		await runSteps(ctx, "turn_sn", "server_native");
+		await settle();
+		expect(reported).toHaveLength(0);
+	});
+});
+
+describe("turn end", () => {
+	for (const type of ["turn.completed", "turn.cancelled"] as const) {
+		test(`${type} reports nothing after its steps`, async () => {
+			const ctx = nativeCtx();
+			await runSteps(ctx, "turn_t", type);
+			await waitForEvents(2);
+			await settle(50);
+			await on(type)(turnEnd(type, `${type}_end`, "turn_t"), ctx);
+			await settle();
+			expect(allEvents()).toHaveLength(2);
+			expect(allEvents().some((event) => String(event.eventId).startsWith(`eve_${type}_end`))).toBe(false);
+		});
+
+		test(`${type} with no steps reports nothing`, async () => {
+			await on(type)(turnEnd(type, `${type}_bare`, "turn_bare"), nativeCtx());
+			await settle();
+			expect(reported).toHaveLength(0);
+		});
+	}
+
+	test("turn.failed reports only an error event", async () => {
 		const ctx = nativeCtx();
-		await runSteps(ctx, "turn_r", "redeliver");
-		const end = turnEnd("turn.completed", "redeliver_end", "turn_r");
-		await on("turn.completed")(end, ctx);
-		await waitForEvents(1);
-		const firstId = allEvents()[0]?.eventId;
-		await runSteps(ctx, "turn_r", "redeliver");
-		await on("turn.completed")(end, ctx);
+		await runSteps(ctx, "turn_f", "failed");
 		await waitForEvents(2);
-		expect(allEvents()[1]?.eventId).toBe(firstId);
+		await settle(50);
+		const before = allEvents().length;
+		await on("turn.failed")(
+			turnEnd("turn.failed", "failed_end", "turn_f", { code: "model_error", message: "upstream exploded" }),
+			ctx,
+		);
+		await waitForEvents(before + 1);
+		await settle(50);
+		const added = allEvents().slice(before);
+		expect(added).toHaveLength(1);
+		expect(added[0]?.kind).toBe("error");
+		expect(added[0]?.eventId).toBe("eve_failed_end");
+		expect(added[0]?.message).toBe("upstream exploded");
+		expect(added[0]?.turnId).toBe("turn_f");
+	});
+
+	test("turn.failed with no steps reports the error alone", async () => {
+		const ctx = nativeCtx();
+		await on("turn.failed")(turnEnd("turn.failed", "f_only", "turn_x", { code: "boom", message: "no model" }), ctx);
+		await waitForEvents(1);
+		await settle(50);
+		expect(allEvents().map((event) => [event.kind, event.eventId])).toEqual([["error", "eve_f_only"]]);
+	});
+
+	test("a server-token session reports nothing at turn end", async () => {
+		const ctx = serverCtx();
+		await on("turn.completed")(turnEnd("turn.completed", "server_end", "turn_s"), ctx);
+		await on("turn.cancelled")(turnEnd("turn.cancelled", "server_cancel", "turn_s"), ctx);
+		await on("turn.failed")(turnEnd("turn.failed", "server_fail", "turn_s", { code: "x", message: "y" }), ctx);
+		await settle();
+		expect(reported).toHaveLength(0);
 	});
 });

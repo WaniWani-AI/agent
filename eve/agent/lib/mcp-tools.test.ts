@@ -92,11 +92,27 @@ async function resolveTools(ctx: ReturnType<typeof ctxWith>, turnId: string): Pr
 	return isRecord(resolved) ? resolved : {};
 }
 
-async function runTool(tools: Record<string, unknown>, name: string): Promise<unknown> {
+async function runTool(tools: Record<string, unknown>, name: string, toolCtx: Record<string, unknown> = {}): Promise<unknown> {
 	const tool = tools[name];
 	const execute: unknown = isRecord(tool) ? tool.execute : undefined;
 	if (typeof execute !== "function") throw new Error(`tool ${name} has no execute`);
-	return await Reflect.apply(execute, tool, [{ plan: "gold" }, { abortSignal: new AbortController().signal }]);
+	return await Reflect.apply(execute, tool, [{ plan: "gold" }, { abortSignal: new AbortController().signal, ...toolCtx }]);
+}
+
+function executingAs(input: { sessionId: string; initiator: Record<string, string>; current: Record<string, string> }) {
+	return {
+		callId: "call_1",
+		toolName: "get_price",
+		session: { id: input.sessionId, auth: { current: principal(input.current), initiator: principal(input.initiator) } },
+	};
+}
+
+async function outcomeOf(promise: Promise<unknown>): Promise<{ ok: true; value: unknown } | { ok: false; error: unknown }> {
+	try {
+		return { ok: true, value: await promise };
+	} catch (error) {
+		return { ok: false, error };
+	}
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -194,6 +210,83 @@ describe("MCP tools for a turn", () => {
 		const tools = await resolveTools(ctx, "turn_s");
 		await runTool(tools, "get_price");
 		expect(steps.map((step) => step.kind)).toEqual(["tool"]);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("a flagged message steered in after the tools resolved makes the tool throw without calling the MCP server", async () => {
+		const ctx = ctxWith({ initiator: NATIVE });
+		const tools = await resolveTools(ctx, "turn_steer");
+		expect(Object.keys(tools)).toEqual(["get_price"]);
+		const outcome = await outcomeOf(
+			runTool(
+				tools,
+				"get_price",
+				executingAs({ sessionId: ctx.session.id, initiator: NATIVE, current: { ...NATIVE, guardrail: "blocked" } }),
+			),
+		);
+		expect(outcome.ok).toBe(false);
+		expect(steps.filter((step) => step.kind === "tool")).toEqual([]);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("a steered block also stops a tool whose barrier would have passed", async () => {
+		const ctx = ctxWith({ initiator: NATIVE });
+		const tools = await resolveTools(ctx, "turn_steer_b");
+		const outcome = await outcomeOf(
+			runTool(
+				tools,
+				"get_price",
+				executingAs({ sessionId: ctx.session.id, initiator: NATIVE, current: { ...NATIVE, guardrail: "blocked" } }),
+			),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(outcome.ok).toBe(false);
+		expect(steps.some((step) => step.kind === "tool")).toBe(false);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("a steered block on a session a server token started still stops the tool", async () => {
+		const ctx = ctxWith({ initiator: SERVER });
+		const tools = await resolveTools(ctx, "turn_steer_s");
+		const outcome = await outcomeOf(
+			runTool(
+				tools,
+				"get_price",
+				executingAs({ sessionId: ctx.session.id, initiator: SERVER, current: { ...SERVER, guardrail: "blocked" } }),
+			),
+		);
+		expect(outcome.ok).toBe(false);
+		expect(steps.filter((step) => step.kind === "tool")).toEqual([]);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("the second call of a turn is stopped once a flagged message is steered in between", async () => {
+		const ctx = ctxWith({ initiator: NATIVE });
+		const tools = await resolveTools(ctx, "turn_two_calls");
+		const clean = executingAs({ sessionId: ctx.session.id, initiator: NATIVE, current: NATIVE });
+		const blocked = executingAs({
+			sessionId: ctx.session.id,
+			initiator: NATIVE,
+			current: { ...NATIVE, guardrail: "blocked" },
+		});
+		expect((await outcomeOf(runTool(tools, "get_price", clean))).ok).toBe(true);
+		expect((await outcomeOf(runTool(tools, "get_price", blocked))).ok).toBe(false);
+		expect(steps.filter((step) => step.kind === "tool")).toHaveLength(1);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("a tool runs when the executing caller is clean even though an earlier message was blocked", async () => {
+		const ctx = ctxWith({ initiator: NATIVE });
+		const tools = await resolveTools(ctx, "turn_clean_now");
+		const outcome = await outcomeOf(
+			runTool(
+				tools,
+				"get_price",
+				executingAs({ sessionId: ctx.session.id, initiator: { ...NATIVE, guardrail: "blocked" }, current: NATIVE }),
+			),
+		);
+		expect(outcome.ok).toBe(true);
+		expect(steps.filter((step) => step.kind === "tool")).toHaveLength(1);
 		releaseSnapshot(ctx.session.id);
 	});
 });
