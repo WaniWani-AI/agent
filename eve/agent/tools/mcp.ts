@@ -104,6 +104,10 @@ export default defineDynamic({
 							description: tool.description ?? tool.name,
 							inputSchema: withoutSessionId(tool.inputSchema),
 							execute: async (input: Record<string, unknown>, toolCtx) => {
+								// A flagged message steered into a running turn keeps the tools this turn resolved.
+								if (toolCtx.session?.auth?.current?.attributes.guardrail === GUARDRAIL_BLOCKED) {
+									throw new Error("The visitor's message was blocked by the content safety filter");
+								}
 								if (barrier && !(await userRowStored(barrier))) {
 									console.error("[reporting] a tool ran before its turn's user row was stored", {
 										sessionId,

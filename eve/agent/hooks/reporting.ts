@@ -2,14 +2,13 @@ import type { SessionAuth } from "eve/context";
 import { defineHook } from "eve/hooks";
 import { isNativeSession } from "../lib/browser-token.js";
 import { GUARDRAIL_BLOCKED } from "../lib/guardrail.js";
-import { forgetTurn, report, type UsageStep } from "../lib/reporting.js";
+import { forgetTurn, report } from "../lib/reporting.js";
 import { waitUntil } from "../lib/wait-until.js";
 
 type Meta = { meta: { id: string; at: string } };
 type Ctx = { session: { id: string; auth: SessionAuth } };
 
 const stepModels = new Map<string, string>();
-const turnUsage = new Map<string, UsageStep[]>();
 
 function sessionOf(ctx: Ctx): { environmentId: string; sessionId: string } | undefined {
 	if (!isNativeSession(ctx.session.auth)) return undefined;
@@ -23,42 +22,23 @@ function eventId(event: Meta): string {
 	return `eve_${event.meta.id}`;
 }
 
-function endTurn(input: {
-	ctx: Ctx;
-	event: Meta;
-	turnId: string;
-	error?: string;
-}): void {
-	const session = sessionOf(input.ctx);
-	const steps = turnUsage.get(input.ctx.session.id) ?? [];
-	turnUsage.delete(input.ctx.session.id);
+function endTurn(input: { ctx: Ctx; event: Meta; turnId: string; error?: string }): void {
 	stepModels.delete(input.ctx.session.id);
+	const session = sessionOf(input.ctx);
 	if (!session) return;
 	forgetTurn({ ...session, turnId: input.turnId });
-	waitUntil(report(session, [
-		...(steps.length > 0
-			? [
-					{
-						kind: "usage" as const,
-						eventId: `${eventId(input.event)}_usage`,
-						occurredAt: input.event.meta.at,
-						turnId: input.turnId,
-						steps,
-					},
-				]
-			: []),
-		...(input.error !== undefined
-			? [
-					{
-						kind: "error" as const,
-						eventId: eventId(input.event),
-						occurredAt: input.event.meta.at,
-						turnId: input.turnId,
-						message: input.error,
-					},
-				]
-			: []),
-	]));
+	if (input.error === undefined) return;
+	waitUntil(
+		report(session, [
+			{
+				kind: "error",
+				eventId: eventId(input.event),
+				occurredAt: input.event.meta.at,
+				turnId: input.turnId,
+				message: input.error,
+			},
+		]),
+	);
 }
 
 /**
@@ -111,20 +91,32 @@ export default defineHook({
 			if (sessionOf(ctx)) stepModels.set(ctx.session.id, event.data.modelId);
 		},
 		"step.completed": (event, ctx) => {
+			const session = sessionOf(ctx);
 			const usage = event.data.usage;
-			if (!sessionOf(ctx) || !usage) return;
-			const steps = turnUsage.get(ctx.session.id) ?? [];
-			steps.push({
-				modelId: stepModels.get(ctx.session.id) ?? "unknown",
-				inputTokens: usage.inputTokens ?? 0,
-				outputTokens: usage.outputTokens ?? 0,
-				cacheReadTokens: usage.cacheReadTokens ?? 0,
-				...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
-				...(event.data.providerMetadata?.gateway.generationId
-					? { generationId: event.data.providerMetadata.gateway.generationId }
-					: {}),
-			});
-			turnUsage.set(ctx.session.id, steps);
+			if (!session || !usage) return;
+			// One row per model call: a turn's calls can run on different workers.
+			waitUntil(
+				report(session, [
+					{
+						kind: "usage",
+						eventId: eventId(event),
+						occurredAt: event.meta.at,
+						turnId: event.data.turnId,
+						steps: [
+							{
+								modelId: stepModels.get(ctx.session.id) ?? "unknown",
+								inputTokens: usage.inputTokens ?? 0,
+								outputTokens: usage.outputTokens ?? 0,
+								cacheReadTokens: usage.cacheReadTokens ?? 0,
+								...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+								...(event.data.providerMetadata?.gateway.generationId
+									? { generationId: event.data.providerMetadata.gateway.generationId }
+									: {}),
+							},
+						],
+					},
+				]),
+			);
 		},
 		"turn.completed": (event, ctx) => {
 			endTurn({ ctx, event, turnId: event.data.turnId });

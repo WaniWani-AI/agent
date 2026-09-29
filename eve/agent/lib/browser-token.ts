@@ -31,6 +31,24 @@ export function browserOperation(request: Request, sessionId: string): BrowserOp
 	return undefined;
 }
 
+/**
+ * Turn context, output schemas and callbacks reach the model without passing
+ * the guardrail, so only the app may set them.
+ */
+const SERVER_ONLY_FIELDS = ["clientContext", "context", "outputSchema", "callback", "activityObserver"];
+
+async function carriesServerOnlyFields(request: Request): Promise<boolean> {
+	const body: unknown = await request
+		.clone()
+		.json()
+		.catch(() => null);
+	return (
+		typeof body === "object" &&
+		body !== null &&
+		SERVER_ONLY_FIELDS.some((field) => field in body)
+	);
+}
+
 export async function verifyBrowserToken(input: {
 	token: string | null;
 	request: Request;
@@ -49,7 +67,9 @@ export async function verifyBrowserToken(input: {
 	const sessionId = attributes.sid;
 	const { environmentId } = attributes;
 	if (typeof sessionId !== "string" || typeof environmentId !== "string" || !environmentId) return null;
-	if (!browserOperation(input.request, sessionId)) return null;
+	const operation = browserOperation(input.request, sessionId);
+	if (!operation) return null;
+	if (operation === "send" && (await carriesServerOnlyFields(input.request))) return null;
 
 	const region = process.env.WANIWANI_REGION;
 	if (region && attributes.region !== region) return null;
