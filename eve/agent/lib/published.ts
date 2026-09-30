@@ -1,5 +1,9 @@
 import { listMcpTools, type McpTool } from "./mcp-catalog.js";
-import { fetchSessionConfig, type SessionConfig } from "./session-config.js";
+import {
+	ConfigFetchError,
+	fetchSessionConfig,
+	type SessionConfig,
+} from "./session-config.js";
 import type { Tenant } from "./tenant.js";
 
 export type Published = { config: SessionConfig; tools: McpTool[] };
@@ -8,10 +12,12 @@ type Entry = {
 	published?: Published;
 	etag?: string;
 	checkedAt: number;
+	confirmedAt?: number;
 	lastError?: string;
 };
 
 const REVALIDATE_AFTER_MS = 60_000;
+const MAX_STALE_MS = 10 * 60_000;
 
 const entries = new Map<string, Entry>();
 const inflight = new Map<string, Promise<Published>>();
@@ -22,6 +28,17 @@ function messageOf(error: unknown): string {
 
 function fresh(entry: Entry | undefined): boolean {
 	return entry !== undefined && Date.now() - entry.checkedAt < REVALIDATE_AFTER_MS;
+}
+
+function servable(entry: Entry | undefined): Published | undefined {
+	return entry?.confirmedAt !== undefined && Date.now() - entry.confirmedAt <= MAX_STALE_MS
+		? entry.published
+		: undefined;
+}
+
+/** The app answers 404 once the agent is unpublished or its environment is gone. */
+function withdrawn(error: unknown): boolean {
+	return error instanceof ConfigFetchError && error.status === 404;
 }
 
 /** The prompt describes the tools, so the config and the tool list only ever move together. */
@@ -47,10 +64,16 @@ async function refresh(tenant: Tenant): Promise<Published> {
 			published,
 			etag: fetched.etag,
 			checkedAt: attempt.checkedAt,
+			confirmedAt: attempt.checkedAt,
 		});
 		return published;
 	} catch (error) {
-		entries.set(tenant.key, { ...attempt, lastError: messageOf(error) });
+		entries.set(
+			tenant.key,
+			withdrawn(error)
+				? { checkedAt: attempt.checkedAt, lastError: messageOf(error) }
+				: { ...attempt, lastError: messageOf(error) },
+		);
 		throw error;
 	}
 }
@@ -66,12 +89,13 @@ function shared(tenant: Tenant): Promise<Published> {
 	return pass;
 }
 
-/** What a turn resolves against: memory when warm, a blocking pass only when cold. */
+/** What a turn resolves against: memory when warm, a blocking pass when cold or too stale. */
 export async function publishedNow(tenant: Tenant): Promise<Published> {
 	const entry = entries.get(tenant.key);
-	if (entry?.published) {
+	const published = servable(entry);
+	if (published) {
 		revalidatePublished(tenant);
-		return entry.published;
+		return published;
 	}
 	if (fresh(entry) && !inflight.has(tenant.key)) {
 		throw new Error(

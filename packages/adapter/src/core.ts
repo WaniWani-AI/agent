@@ -1,4 +1,4 @@
-import { SignJWT } from "jose";
+import { type CryptoKey, importPKCS8, SignJWT } from "jose";
 import {
 	type Credential,
 	type EveDelivery,
@@ -20,9 +20,23 @@ export type { UIMessageChunk, WidgetContext } from "./ui-stream.js";
 
 const TOKEN_LIFETIME_SECONDS = 300;
 
+const signingKeys = new Map<string, Promise<CryptoKey>>();
+
+/** A PEM pasted into Vercel's env editor can arrive with literal `\n` sequences. */
+function signingKeyFor(pem: string): Promise<CryptoKey> {
+	let key = signingKeys.get(pem);
+	if (!key) {
+		key = importPKCS8(pem.replaceAll("\\n", "\n"), "ES256");
+		key.catch(() => signingKeys.delete(pem));
+		signingKeys.set(pem, key);
+	}
+	return key;
+}
+
 /** One short-lived session token for the WaniWani-hosted runtime. */
 export async function mintSessionToken(input: {
-	secret: string;
+	/** PKCS8 PEM of the app's P-256 private key. */
+	signingKey: string;
 	sub: string;
 	environmentId?: string;
 	channelId?: string;
@@ -39,14 +53,14 @@ export async function mintSessionToken(input: {
 		...(input.sid ? { sid: input.sid } : {}),
 	};
 	return await new SignJWT(claims)
-		.setProtectedHeader({ alg: "HS256" })
+		.setProtectedHeader({ alg: "ES256" })
 		.setIssuer("waniwani:agent")
 		.setAudience("waniwani-agent-runtime")
 		.setSubject(input.sub)
 		.setIssuedAt()
 		.setJti(crypto.randomUUID())
 		.setExpirationTime(`${TOKEN_LIFETIME_SECONDS}s`)
-		.sign(new TextEncoder().encode(input.secret));
+		.sign(await signingKeyFor(input.signingKey));
 }
 
 export type RunTurnInput = {

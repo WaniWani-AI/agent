@@ -65,8 +65,9 @@ and the runtime never calls WaniWani to check it. Two optional headers travel wi
 Never let the key reach a browser. The visitor header is an assertion by your backend, so the
 runtime trusts it exactly as far as it trusts the key holder.
 
-**WaniWani-hosted, when `WANIWANI_AGENT_SECRET` is set.** One short-lived HS256 JWT per visitor,
-minted server-side.
+**WaniWani-hosted, when `WANIWANI_APP_PUBLIC_KEY` is set.** One short-lived ES256 JWT per visitor,
+minted server-side by the app with its P-256 private key. The runtime holds only the public key, so
+nothing it stores can mint a token.
 
 | Claim | Value |
 | --- | --- |
@@ -116,9 +117,17 @@ The configuration and the tool list move together on purpose. A published prompt
 tools your app deploys, so refreshing one without the other leaves the agent describing tools it
 does not have.
 
-A failed check keeps the copy already in memory and logs. Conversations carry on. A deployment
-that has never loaded a configuration fails the turn with that error rather than answering on a
-prompt nobody published, and retries at the same one-minute cadence rather than on every message.
+A 404 from the app means the agent was unpublished or its environment is gone. The runtime drops
+its copy for that tenant at once, and turns fail until a check finds a configuration again. Any
+other failed check keeps the copy in memory and logs, so conversations carry on, but only for ten
+minutes after the last check that answered 200 or 304. Past that the turn waits on a fresh read and
+fails if it fails. A deployment that has never loaded a configuration fails the turn with that
+error rather than answering on a prompt nobody published, and retries at the same one-minute
+cadence rather than on every message.
+
+On the hosted form the config read carries the visitor token that started the turn as
+`x-waniwani-grant`, next to the service token. The app refuses a service-token read for an
+environment unless a live token it signed for that environment comes with it.
 
 ## Reaching your MCP server
 
@@ -156,8 +165,8 @@ config carries no key, so hosted deployments are on managed inference until a br
 | `WORKFLOW_LOCAL_BASE_URL` | yes | How the runtime reaches itself, e.g. `http://eve:3001`. |
 | `POSTGRES_PASSWORD` | yes | Read by `compose.yaml`, which refuses to start without it. |
 | `WANIWANI_API_KEY` | one of | The environment key (`wwk_…`). Selects the self-hosted form. |
-| `WANIWANI_AGENT_SECRET` | one of | HMAC secret for the visitor JWT. Selects the WaniWani-hosted form. |
-| `WANIWANI_SERVICE_PRIVATE_KEY` | with the secret | Ed25519 PKCS8 PEM the config fetch signs its service token with. |
+| `WANIWANI_APP_PUBLIC_KEY` | one of | The app's P-256 public key as an SPKI PEM (`-----BEGIN PUBLIC KEY-----`), which verifies the visitor JWT. Literal `\n` sequences are read as newlines. Selects the WaniWani-hosted form. |
+| `WANIWANI_SERVICE_PRIVATE_KEY` | with the public key | Ed25519 PKCS8 PEM the config fetch signs its service token with. |
 | `WANIWANI_REGION` | with the PEM | `us` or `eu`. The audience the service token is minted for. |
 | `WANIWANI_CHANNEL_ID` | no | Self-hosted only. The channel turns are attributed to. Must be one the environment published, or the turn fails naming it. Defaults to the environment's first channel. |
 | `MODEL_API_KEY` | for `byo` | Key for your own model, when the payload carries none. |
