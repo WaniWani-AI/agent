@@ -34,7 +34,12 @@ type Session = { environmentId: string; sessionId: string };
 const DELIVERY_WINDOW_MS = 30_000;
 const BASE_DELAY_MS = 250;
 const MAX_DELAY_MS = 5_000;
-const REQUEST_TIMEOUT_MS = 5_000;
+/**
+ * Well past the app's own bound on a report (redaction gives up at 2 s), so a
+ * retry never races a first attempt the app is still storing: the app places
+ * rows when a report arrives, and the retry would take a later place.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
 const RESERVE_TIMEOUT_MS = 1_000;
 
 /** One chain per session keeps the app's insert order equal to stream order. */
