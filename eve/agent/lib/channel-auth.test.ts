@@ -732,12 +732,20 @@ describe("hosted runtime, a browser send's extra", () => {
 		expect(attributesOf(outcome).extra).toBe(extra);
 	});
 
-	test("an 8193-character JSON object is refused", async () => {
-		const prefix = '{"k":"';
-		const suffix = '"}';
-		const extra = `${prefix}${"x".repeat(8_193 - prefix.length - suffix.length)}${suffix}`;
-		expect(extra.length).toBe(8_193);
-		const outcome = await send(browserToken(), SID, { "x-waniwani-extra": extra });
+	for (const length of [8_193, 20_000]) {
+		test(`a ${length}-character JSON object is accepted and reaches the attributes`, async () => {
+			const prefix = '{"k":"';
+			const suffix = '"}';
+			const extra = `${prefix}${"x".repeat(length - prefix.length - suffix.length)}${suffix}`;
+			expect(extra.length).toBe(length);
+			const outcome = await send(browserToken(), SID, { "x-waniwani-extra": extra });
+			expect(outcome.status).toBe(202);
+			expect(attributesOf(outcome).extra).toBe(extra);
+		});
+	}
+
+	test("a large but malformed extra is still refused", async () => {
+		const outcome = await send(browserToken(), SID, { "x-waniwani-extra": `[${"1,".repeat(5_000)}1]` });
 		expect(outcome.status).toBe(401);
 		expect(outcome.captured.sends).toEqual([]);
 	});

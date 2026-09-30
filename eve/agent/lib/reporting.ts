@@ -37,6 +37,13 @@ const MAX_DELAY_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 5_000;
 const RESERVE_TIMEOUT_MS = 1_000;
 
+/** One chain per session keeps the app's insert order equal to stream order. */
+const chains = new Map<string, Promise<void>>();
+
+function key(session: Session): string {
+	return `${session.environmentId}\u0000${session.sessionId}`;
+}
+
 async function post(
 	session: Session,
 	body: Record<string, unknown>,
@@ -54,9 +61,23 @@ async function post(
 	});
 }
 
+export function report(session: Session, events: ReportEvent[]): Promise<boolean> {
+	if (events.length === 0) return Promise.resolve(true);
+	const previous = chains.get(key(session)) ?? Promise.resolve();
+	const delivered = previous.then(() => deliver(session, events));
+	const settled = delivered.then(
+		() => undefined,
+		() => undefined,
+	);
+	chains.set(key(session), settled);
+	void settled.then(() => {
+		if (chains.get(key(session)) === settled) chains.delete(key(session));
+	});
+	return delivered;
+}
+
 /** The app deduplicates on each event id, so a retry after a lost response writes nothing twice. */
-export async function report(session: Session, events: ReportEvent[]): Promise<boolean> {
-	if (events.length === 0) return true;
+async function deliver(session: Session, events: ReportEvent[]): Promise<boolean> {
 	const deadline = Date.now() + DELIVERY_WINDOW_MS;
 	let delay = BASE_DELAY_MS;
 	for (let attempt = 1; ; attempt += 1) {

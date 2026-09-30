@@ -45,8 +45,6 @@ function withBackendHeaders(request: Request, attributes: Attributes): Attribute
 	};
 }
 
-const MAX_EXTRA_HEADER = 8_192;
-
 /**
  * What a browser sends with a message and the chat route takes from its body:
  * `extra` and documents only ever reach MCP `_meta`, so the guardrail does not
@@ -57,7 +55,6 @@ function withBrowserHeaders(request: Request, auth: SessionAuthContext): Session
 	const extra = request.headers.get("x-waniwani-extra");
 	if (documents === null) return null;
 	if (extra !== null) {
-		if (extra.length > MAX_EXTRA_HEADER) return null;
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(extra);

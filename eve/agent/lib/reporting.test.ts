@@ -221,30 +221,170 @@ describe("report: where and how", () => {
 	});
 });
 
-describe("report: no delivery chain", () => {
-	test("a later report in the same session goes out while an earlier one is still in flight", async () => {
+function firstIds(): unknown[] {
+	return calls.map((call) => eventIdsOf(call)[0]);
+}
+
+describe("report: order within one session", () => {
+	test("a later report is not sent while an earlier one is in flight", async () => {
 		const first = deferred<Response>();
 		stubFetch((_call, index) => (index === 0 ? first.promise : Response.json({ ok: true })));
 		const session = uniqueSession();
 		const a = report(session, [userMessage("turn_1")]);
 		const b = report(session, [assistantMessage("turn_1")]);
-		expect(await b).toBe(true);
-		expect(calls.map(eventIdsOf)).toEqual([["eve_u_turn_1"], ["eve_a_turn_1"]]);
+		await settle(100);
+		expect(firstIds()).toEqual(["eve_u_turn_1"]);
 		first.resolve(Response.json({ ok: true }));
 		expect(await a).toBe(true);
+		expect(await b).toBe(true);
+		expect(firstIds()).toEqual(["eve_u_turn_1", "eve_a_turn_1"]);
 	});
 
-	test("a later report does not wait for an earlier one's retries", async () => {
+	test("three reports land in the order they were made, each after the previous settled", async () => {
+		const gates = [deferred<Response>(), deferred<Response>(), deferred<Response>()];
+		stubFetch((_call, index) => gates[index]?.promise ?? Response.json({ ok: true }));
+		const session = uniqueSession();
+		const all = Promise.all([
+			report(session, [userMessage("t1")]),
+			report(session, [assistantMessage("t1")]),
+			report(session, [userMessage("t2")]),
+		]);
+		await settle(50);
+		expect(calls).toHaveLength(1);
+		gates[0]?.resolve(Response.json({ ok: true }));
+		await settle(50);
+		expect(calls).toHaveLength(2);
+		gates[1]?.resolve(Response.json({ ok: true }));
+		await settle(50);
+		expect(calls).toHaveLength(3);
+		gates[2]?.resolve(Response.json({ ok: true }));
+		expect(await all).toEqual([true, true, true]);
+		expect(firstIds()).toEqual(["eve_u_t1", "eve_a_t1", "eve_u_t2"]);
+	});
+
+	test("an earlier report's retries hold back the next one", async () => {
 		useFakeClock();
+		stubFetch((_call, index) => (index < 3 ? new Response("busy", { status: 503 }) : Response.json({ ok: true })));
+		const session = uniqueSession();
+		const a = report(session, [userMessage("turn_1")]);
+		const b = report(session, [assistantMessage("turn_1")]);
+		expect(await runOut(a)).toBe(true);
+		expect(await runOut(b)).toBe(true);
+		expect(firstIds()).toEqual(["eve_u_turn_1", "eve_u_turn_1", "eve_u_turn_1", "eve_u_turn_1", "eve_a_turn_1"]);
+	});
+
+	test("an earlier report the app refuses does not stop the next one", async () => {
 		stubFetch((call) =>
-			eventIdsOf(call)[0] === "eve_u_turn_1" ? new Response("busy", { status: 503 }) : Response.json({ ok: true }),
+			eventIdsOf(call)[0] === "eve_u_turn_1" ? new Response("bad", { status: 400 }) : Response.json({ ok: true }),
 		);
 		const session = uniqueSession();
 		const a = report(session, [userMessage("turn_1")]);
 		const b = report(session, [assistantMessage("turn_1")]);
-		await flush();
-		expect(calls.map((call) => eventIdsOf(call)[0])).toEqual(["eve_u_turn_1", "eve_a_turn_1"]);
+		expect(await a).toBe(false);
 		expect(await b).toBe(true);
+		expect(firstIds()).toEqual(["eve_u_turn_1", "eve_a_turn_1"]);
+	});
+
+	test("an earlier report that gives up after its window does not stop the next one", async () => {
+		useFakeClock();
+		stubFetch((call) =>
+			eventIdsOf(call)[0] === "eve_u_turn_1" ? new Response("down", { status: 503 }) : Response.json({ ok: true }),
+		);
+		const session = uniqueSession();
+		const a = report(session, [userMessage("turn_1")]);
+		const b = report(session, [assistantMessage("turn_1")]);
+		expect(await runOut(a)).toBe(false);
+		const gaveUpAt = Date.now();
+		expect(await runOut(b)).toBe(true);
+		const ids = firstIds();
+		expect(ids.at(-1)).toBe("eve_a_turn_1");
+		expect(ids.filter((id) => id === "eve_a_turn_1")).toHaveLength(1);
+		expect(ids.indexOf("eve_a_turn_1")).toBe(ids.length - 1);
+		expect(calls.at(-1)?.at).toBeGreaterThanOrEqual(gaveUpAt);
+	});
+
+	test("an earlier report that throws on every attempt does not stop the next one", async () => {
+		useFakeClock();
+		stubFetch((call) => {
+			if (eventIdsOf(call)[0] === "eve_u_turn_1") throw new TypeError("fetch failed");
+			return Response.json({ ok: true });
+		});
+		const session = uniqueSession();
+		const a = report(session, [userMessage("turn_1")]);
+		const b = report(session, [assistantMessage("turn_1")]);
+		expect(await runOut(a)).toBe(false);
+		expect(await runOut(b)).toBe(true);
+		const ids = firstIds();
+		expect(ids.lastIndexOf("eve_u_turn_1")).toBeLessThan(ids.indexOf("eve_a_turn_1"));
+	});
+
+	test("a queued report's 30 s window starts when its own delivery starts", async () => {
+		const start = useFakeClock();
+		stubFetch(() => new Response("down", { status: 503 }));
+		const session = uniqueSession();
+		const a = report(session, [userMessage("turn_1")]);
+		const b = report(session, [assistantMessage("turn_1")]);
+		expect(await runOut(a)).toBe(false);
+		expect(await runOut(b)).toBe(false);
+		const later = calls.filter((call) => eventIdsOf(call)[0] === "eve_a_turn_1");
+		const firstAt = later[0]?.at ?? start;
+		expect(firstAt - start).toBeGreaterThanOrEqual(25_000);
+		expect(gapsOf(later)).toEqual([250, 500, 1_000, 2_000, 4_000, 5_000, 5_000, 5_000, 5_000]);
+		expect(Date.now() - firstAt).toBeGreaterThanOrEqual(25_000);
+		expect(Date.now() - firstAt).toBeLessThanOrEqual(30_000);
+	});
+
+	test("once a session's reports have settled, a new one goes out at once", async () => {
+		stubFetch(() => Response.json({ ok: true }));
+		const session = uniqueSession();
+		expect(await report(session, [userMessage("turn_1")])).toBe(true);
+		await settle(20);
+		const gate = deferred<Response>();
+		stubFetch(() => gate.promise);
+		const next = report(session, [assistantMessage("turn_1")]);
+		await settle(20);
+		expect(firstIds()).toEqual(["eve_u_turn_1", "eve_a_turn_1"]);
+		gate.resolve(Response.json({ ok: true }));
+		expect(await next).toBe(true);
+	});
+});
+
+describe("report: sessions do not wait on each other", () => {
+	test("another session's report goes out while this session's is in flight", async () => {
+		const first = deferred<Response>();
+		stubFetch((_call, index) => (index === 0 ? first.promise : Response.json({ ok: true })));
+		const one = uniqueSession();
+		const two = uniqueSession();
+		const a = report(one, [userMessage("turn_1")]);
+		const b = report(two, [assistantMessage("turn_1")]);
+		expect(await b).toBe(true);
+		expect(calls.map((call) => call.body.sessionId)).toEqual([one.sessionId, two.sessionId]);
+		first.resolve(Response.json({ ok: true }));
+		expect(await a).toBe(true);
+	});
+
+	test("the same session id in another environment does not wait", async () => {
+		const first = deferred<Response>();
+		stubFetch((_call, index) => (index === 0 ? first.promise : Response.json({ ok: true })));
+		const sessionId = `sess_shared_${Date.now()}`;
+		const a = report({ environmentId: "env_x", sessionId }, [userMessage("turn_1")]);
+		const b = report({ environmentId: "env_y", sessionId }, [assistantMessage("turn_1")]);
+		expect(await b).toBe(true);
+		expect(calls.map((call) => call.url.searchParams.get("environmentId"))).toEqual(["env_x", "env_y"]);
+		first.resolve(Response.json({ ok: true }));
+		expect(await a).toBe(true);
+	});
+
+	test("another session's report is not held back by this session's retries", async () => {
+		useFakeClock();
+		stubFetch((call) =>
+			call.body.sessionId === "sess_retrying" ? new Response("down", { status: 503 }) : Response.json({ ok: true }),
+		);
+		const a = report({ environmentId: "env_r", sessionId: "sess_retrying" }, [userMessage("turn_1")]);
+		const b = report({ environmentId: "env_r", sessionId: "sess_other" }, [assistantMessage("turn_1")]);
+		await flush();
+		expect(await b).toBe(true);
+		expect(calls.filter((call) => call.body.sessionId === "sess_retrying")).toHaveLength(1);
 		expect(await runOut(a)).toBe(false);
 	});
 });
