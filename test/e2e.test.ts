@@ -1,11 +1,12 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createPrivateKey, randomUUID, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { beforeAll, expect, test } from "bun:test";
 
 const EVE = process.env.EVE_URL ?? "http://127.0.0.1:3001";
 const APP = process.env.APP_URL ?? "http://127.0.0.1:3004";
 const MCP = process.env.MCP_URL ?? "http://127.0.0.1:3002";
 const MODEL = process.env.MODEL_URL ?? "http://127.0.0.1:3003";
-const SECRET = process.env.WANIWANI_AGENT_SECRET ?? "ci-agent-secret";
+const APP_KEY_FILE = new URL("../ci/keys/app.key", import.meta.url);
 const ENV_FILE = process.env.AGENT_ENV_FILE ?? "ci/selfhosted.env";
 const HOSTED = process.env.STACK === "hosted";
 const ENVIRONMENT_ID = "11111111-1111-4111-8111-111111111111";
@@ -40,15 +41,18 @@ function contextHeader(value: Record<string, unknown>): string {
 	);
 }
 
+let appKey: ReturnType<typeof createPrivateKey> | undefined;
+
 /**
  * The self-hosted stack proves itself with the environment key it already holds.
- * The hosted stack takes one short-lived HS256 token per visitor.
+ * The hosted stack takes one short-lived ES256 token per visitor.
  */
 function credential(claims: Record<string, unknown> = {}): string {
 	if (!HOSTED) {
 		return "wwk_test";
 	}
-	const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+	appKey ??= createPrivateKey(readFileSync(APP_KEY_FILE, "utf8"));
+	const header = base64url(JSON.stringify({ alg: "ES256", typ: "JWT" }));
 	const payload = base64url(
 		JSON.stringify({
 			iss: "waniwani:agent",
@@ -60,10 +64,11 @@ function credential(claims: Record<string, unknown> = {}): string {
 			...claims,
 		}),
 	);
-	const signature = createHmac("sha256", SECRET)
-		.update(`${header}.${payload}`)
-		.digest("base64url");
-	return `${header}.${payload}.${signature}`;
+	const signature = sign("sha256", Buffer.from(`${header}.${payload}`), {
+		key: appKey,
+		dsaEncoding: "ieee-p1363",
+	});
+	return `${header}.${payload}.${base64url(signature)}`;
 }
 
 /**
@@ -697,7 +702,8 @@ onHosted(
 			"waniwani/sessionId": "not-the-real-session",
 		};
 
-		const { sessionId } = await startSession("hello", credential(), {
+		const token = credential();
+		const { sessionId } = await startSession("hello", token, {
 			"x-waniwani-context": contextHeader(context),
 		});
 
@@ -709,6 +715,8 @@ onHosted(
 		expect(meta["waniwani/authSource"]).toBe("embed");
 		expect(meta["waniwani/documents"]).toEqual(context["waniwani/documents"]);
 		expect(meta["waniwani/sessionId"]).toBe(sessionId);
+		// The token rides to the config route as the grant, and nowhere else.
+		expect(JSON.stringify(calls)).not.toContain(token);
 	},
 	120_000,
 );

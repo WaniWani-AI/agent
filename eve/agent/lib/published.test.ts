@@ -10,6 +10,7 @@ import {
 } from "bun:test";
 
 const WINDOW_MS = 60_000;
+const MINUTE_MS = 60_000;
 const START = Date.parse("2026-09-14T09:00:00.000Z");
 
 const API_URL = "https://app.test.invalid";
@@ -26,6 +27,7 @@ type Recorded = {
 	url: string;
 	ifNoneMatch: string | null;
 	authorization: string | null;
+	grant: string | null;
 };
 type Replier = (request: Recorded) => Response;
 
@@ -70,6 +72,13 @@ function ok(instructions: string, etag: string): Response {
 	);
 }
 
+function gone(message: string): Response {
+	return new Response(JSON.stringify({ success: false, message }), {
+		status: 404,
+		headers: { "content-type": "application/json" },
+	});
+}
+
 function configCalls(): Recorded[] {
 	return calls.filter((call) => call.url.includes(CONFIG_PATH));
 }
@@ -101,6 +110,7 @@ describe("published", () => {
 				url,
 				ifNoneMatch: headers.get("if-none-match"),
 				authorization: headers.get("authorization"),
+				grant: headers.get("x-waniwani-grant"),
 			};
 			calls.push(recorded);
 			if (!url.includes(CONFIG_PATH)) {
@@ -113,7 +123,7 @@ describe("published", () => {
 		process.env.WANIWANI_API_KEY = "wwk_unit";
 		process.env.WANIWANI_SERVICE_PRIVATE_KEY = SERVICE_KEY;
 		process.env.WANIWANI_REGION = "eu";
-		delete process.env.WANIWANI_AGENT_SECRET;
+		delete process.env.WANIWANI_APP_PUBLIC_KEY;
 		delete process.env.WANIWANI_CHANNEL_ID;
 	});
 
@@ -121,7 +131,7 @@ describe("published", () => {
 		globalThis.fetch = originalFetch;
 		setSystemTime();
 		delete process.env.WANIWANI_SERVICE_PRIVATE_KEY;
-		delete process.env.WANIWANI_AGENT_SECRET;
+		delete process.env.WANIWANI_APP_PUBLIC_KEY;
 	});
 
 	test("a cold tenant waits for its first pass", async () => {
@@ -276,6 +286,105 @@ describe("published", () => {
 		expect(call?.authorization).toBe("Bearer wwk_unit");
 	});
 
+	test("an environment tenant's grant rides along on the config read", async () => {
+		await publishedNow({ ...ALPHA, grant: "app.signed.token" });
+
+		expect(configCalls()[0]?.grant).toBe("app.signed.token");
+	});
+
+	test("the self tenant sends no grant", async () => {
+		await publishedNow(SELF);
+
+		expect(configCalls()[0]?.grant).toBeNull();
+	});
+
+	test("a 404 on revalidation drops the warm copy at once", async () => {
+		await publishedNow(ALPHA);
+
+		reply = () => gone("NO_LIVE_CONFIG");
+		setSystemTime(new Date(START + WINDOW_MS + 1));
+		await publishedNow(ALPHA);
+		await settle();
+
+		await expect(publishedNow(ALPHA)).rejects.toThrow(/NO_LIVE_CONFIG/);
+		expect(configCalls()).toHaveLength(2);
+
+		reply = () => ok("republished", '"e2"');
+		setSystemTime(new Date(START + 2 * WINDOW_MS + 2));
+		expect((await publishedNow(ALPHA)).config.instructions).toBe("republished");
+		expect(configCalls().at(-1)?.ifNoneMatch).toBeNull();
+	});
+
+	test("a 404 on a blocking pass past the staleness cap fails the turn", async () => {
+		await publishedNow(ALPHA);
+
+		reply = () => gone("ENVIRONMENT_NOT_FOUND");
+		setSystemTime(new Date(START + 10 * MINUTE_MS + 1));
+
+		await expect(publishedNow(ALPHA)).rejects.toThrow(/ENVIRONMENT_NOT_FOUND/);
+		await expect(publishedNow(ALPHA)).rejects.toThrow(/No published configuration/);
+	});
+
+	test("transient failures keep serving the copy for ten minutes", async () => {
+		await publishedNow(ALPHA);
+
+		const failures = [
+			() => new Response("boom", { status: 500 }),
+			() => new Response("slow down", { status: 429 }),
+			() => new Response("nope", { status: 401 }),
+		];
+		for (const [index, failure] of failures.entries()) {
+			reply = failure;
+			setSystemTime(new Date(START + (index + 1) * 3 * MINUTE_MS));
+			expect((await publishedNow(ALPHA)).config.instructions).toBe("first");
+			await settle();
+		}
+
+		listTools = async () => {
+			throw new Error("mcp down");
+		};
+		reply = () => ok("second", '"e2"');
+		setSystemTime(new Date(START + 10 * MINUTE_MS));
+		expect((await publishedNow(ALPHA)).config.instructions).toBe("first");
+		await settle();
+		expect(configCalls()).toHaveLength(5);
+	});
+
+	test("past ten minutes without a successful check the turn fails", async () => {
+		await publishedNow(ALPHA);
+
+		reply = () => new Response("boom", { status: 503 });
+		setSystemTime(new Date(START + 5 * MINUTE_MS));
+		await publishedNow(ALPHA);
+		await settle();
+
+		setSystemTime(new Date(START + 10 * MINUTE_MS + 1));
+		await expect(publishedNow(ALPHA)).rejects.toThrow(/503/);
+		await expect(publishedNow(ALPHA)).rejects.toThrow(/No published configuration/);
+		expect(configCalls()).toHaveLength(3);
+
+		reply = () => new Response(null, { status: 304 });
+		setSystemTime(new Date(START + 11 * MINUTE_MS + 2));
+		expect((await publishedNow(ALPHA)).config.instructions).toBe("first");
+	});
+
+	test("a 304 counts as a successful check for the staleness cap", async () => {
+		await publishedNow(ALPHA);
+
+		reply = () => new Response(null, { status: 304 });
+		setSystemTime(new Date(START + 9 * MINUTE_MS));
+		await publishedNow(ALPHA);
+		await settle();
+
+		reply = () => new Response("boom", { status: 500 });
+		setSystemTime(new Date(START + 15 * MINUTE_MS));
+		expect((await publishedNow(ALPHA)).config.instructions).toBe("first");
+		await settle();
+
+		setSystemTime(new Date(START + 19 * MINUTE_MS + 1));
+		await expect(publishedNow(ALPHA)).rejects.toThrow(/500/);
+	});
+
 	test("an incomplete payload fails rather than serving a blank prompt", async () => {
 		reply = () =>
 			new Response(
@@ -293,7 +402,7 @@ describe("credentialForm and tenantOf", () => {
 			current: null,
 			initiator: {
 				attributes,
-				authenticator: "jwt-hmac",
+				authenticator: "jwt-ecdsa",
 				principalId: "waniwani:agent:visitor",
 				principalType: "service",
 				subject: "visitor",
@@ -303,7 +412,7 @@ describe("credentialForm and tenantOf", () => {
 
 	beforeEach(() => {
 		delete process.env.WANIWANI_API_KEY;
-		delete process.env.WANIWANI_AGENT_SECRET;
+		delete process.env.WANIWANI_APP_PUBLIC_KEY;
 		delete process.env.WANIWANI_CHANNEL_ID;
 	});
 
@@ -312,14 +421,14 @@ describe("credentialForm and tenantOf", () => {
 		expect(credentialForm()).toBe("self-hosted");
 	});
 
-	test("the agent secret alone selects the hosted form", () => {
-		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+	test("the app public key alone selects the hosted form", () => {
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
 		expect(credentialForm()).toBe("hosted");
 	});
 
 	test("both forms configured is refused", () => {
 		process.env.WANIWANI_API_KEY = "wwk_unit";
-		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
 		expect(() => credentialForm()).toThrow(/exactly one/);
 	});
 
@@ -328,11 +437,27 @@ describe("credentialForm and tenantOf", () => {
 	});
 
 	test("a claimed environment is the tenant key on the hosted form", () => {
-		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
 		expect(tenantOf(auth({ environmentId: "env-1" }))).toEqual({
 			key: "env-1",
 			environmentId: "env-1",
 		});
+	});
+
+	test("the hosted form takes the current caller's grant over the initiator's", () => {
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
+		const { initiator } = auth({ environmentId: "env-1", grant: "initiator.token" });
+		const current = {
+			...initiator,
+			attributes: { environmentId: "env-1", grant: "current.token" },
+		};
+		expect(tenantOf({ current, initiator }).grant).toBe("current.token");
+		expect(tenantOf({ current: null, initiator }).grant).toBe("initiator.token");
+	});
+
+	test("a grant never reaches the self tenant", () => {
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+		expect(tenantOf(auth({ grant: "stray.token" }))).toEqual({ key: "self" });
 	});
 
 	test("the self-hosted form is always the self tenant", () => {
@@ -348,8 +473,8 @@ describe("credentialForm and tenantOf", () => {
 	});
 
 	test("no claimed environment on the hosted form fails the turn", () => {
-		process.env.WANIWANI_AGENT_SECRET = "s3cret";
-		expect(() => tenantOf(auth({}))).toThrow(/WANIWANI_AGENT_SECRET/);
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
+		expect(() => tenantOf(auth({}))).toThrow(/WANIWANI_APP_PUBLIC_KEY/);
 	});
 });
 
@@ -364,7 +489,7 @@ describe("resolveChannel", () => {
 			current: null,
 			initiator: {
 				attributes,
-				authenticator: "jwt-hmac",
+				authenticator: "jwt-ecdsa",
 				principalId: "waniwani:agent:visitor",
 				principalType: "service",
 				subject: "visitor",
@@ -374,19 +499,19 @@ describe("resolveChannel", () => {
 
 	beforeEach(() => {
 		delete process.env.WANIWANI_API_KEY;
-		delete process.env.WANIWANI_AGENT_SECRET;
+		delete process.env.WANIWANI_APP_PUBLIC_KEY;
 		delete process.env.WANIWANI_CHANNEL_ID;
 	});
 
 	test("the hosted form takes the channel off the claim", () => {
-		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
 		expect(
 			resolveChannel({ auth: auth({ channelId: "chan-2" }), channels }),
 		).toEqual({ id: "chan-2", label: "widget" });
 	});
 
 	test("a hosted claim falls back to the first channel when absent", () => {
-		process.env.WANIWANI_AGENT_SECRET = "s3cret";
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
 		expect(resolveChannel({ auth: auth({}), channels })).toEqual(channels[0]);
 	});
 
@@ -416,7 +541,7 @@ describe("assertCallerOwnsSession", () => {
 		if (input.environmentId) attributes.environmentId = input.environmentId;
 		return {
 			attributes,
-			authenticator: "jwt-hmac",
+			authenticator: "jwt-ecdsa",
 			principalId: `waniwani:agent:${input.subject}`,
 			principalType: "service",
 			subject: input.subject,

@@ -7,8 +7,9 @@ MCP server's tools to the model over MCP.
 Run it yourself next to your MCP server, or let WaniWani host it. The same image does both, and
 the credential is what picks the shape. A self-hosted deployment holds its environment's own key,
 serves that one environment, and takes the visitor from a header its backend sets. The hosted
-runtime holds an HMAC secret instead, takes one short-lived JWT per visitor, and serves whichever
-environment that token names. Setting both, or neither, refuses to start.
+runtime holds the app's ES256 public key instead, takes one short-lived JWT per visitor that only
+the app can sign, and serves whichever environment that token names. Setting both, or neither,
+refuses to start.
 
 ```
 eve/               the Eve project: the agent, its Dockerfile and its pinned dependencies
@@ -34,7 +35,7 @@ are peers, which an MCP server built on Skybridge already has.
 calls in process.
 
 ```ts
-mintSessionToken({ secret, sub, environmentId?, channelId?, sid? }): Promise<string>
+mintSessionToken({ signingKey, sub, environmentId?, channelId?, sid? }): Promise<string>
 runTurn({ eveUrl, credential, visitorId?, message, sessionId?, cursor?, clientContext?, extra?, context?, signal? })
 cancelTurn({ eveUrl, credential, sessionId }): Promise<void>
 runtimeHealth({ eveUrl, credential }): Promise<unknown>
@@ -88,12 +89,15 @@ copy. Instructions, tools and the model all read that copy, so a publish landing
 never leave step two running a newer model than the prompt it is executing.
 
 Revalidation runs beside the turn, never in front of it: a conditional `GET` at most once a
-minute per tenant, and a failure keeps the copy already in memory.
+minute per tenant. A 404 means the agent was unpublished or its environment is gone, and drops the
+copy at once. Any other failure keeps the copy in memory until ten minutes have passed since the
+last check that answered 200 or 304. After that the turn waits on a fresh read and fails if it
+fails.
 
 A configuration failure in the `turn.started` hook produces `turn.failed`. The turn never
-answers without its configuration; warm sessions can keep using the cached copy during an
-outage. The one-minute retry floor prevents repeated failures from flooding the configuration
-service.
+answers without its configuration; warm sessions keep using the cached copy through an outage
+shorter than ten minutes. The one-minute retry floor prevents repeated failures from flooding the
+configuration service.
 
 **Who may address a session.** eve authenticates session-addressed routes but never authorizes
 them, so the hosted token carries a `sid` claim naming the one session it may touch and the channel
@@ -131,8 +135,9 @@ MCP fixture mounts on `/agent/v1` under the same env var the template will use. 
 refused for a minute after that.
 
 Check (h) runs against the hosted stack and proves the whole hosted path, since the mock WaniWani
-verifies the Ed25519 service token the runtime signs. `ci/keygen.mjs` mints that keypair per run,
-so no private key is committed. The router stays unmounted there: it speaks for a whole
+verifies the Ed25519 service token the runtime signs and the visitor token it forwards as
+`x-waniwani-grant`. `ci/keygen.mjs` mints that pair and the app's P-256 pair per run, so no private
+key is committed. The router stays unmounted there: it speaks for a whole
 environment with that environment's key, which a hosted runtime does not hold.
 
 ## Releasing
@@ -209,7 +214,7 @@ Workflow. Everywhere else it selects the Postgres world.
 
 Production carries no Deployment Protection, because the channel checks the visitor JWT on every
 session route; previews stay behind Vercel Authentication. The project holds
-`WANIWANI_AGENT_SECRET`, `WANIWANI_SERVICE_PRIVATE_KEY`, `WANIWANI_REGION`, `WANIWANI_API_URL` and
+`WANIWANI_APP_PUBLIC_KEY`, `WANIWANI_SERVICE_PRIVATE_KEY`, `WANIWANI_REGION`, `WANIWANI_API_URL` and
 `AI_GATEWAY_API_KEY`. `WANIWANI_API_KEY` stays unset, which is what makes it the hosted form.
 
 ## Pinning

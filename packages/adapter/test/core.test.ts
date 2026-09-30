@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
+import { generateKeyPairSync } from "node:crypto";
 import { jwtVerify } from "jose";
 import { encodeSse, mintSessionToken, runTurn } from "../src/core.js";
 import type { UIMessageChunk } from "../src/ui-stream.js";
 
-const SECRET = "ci-agent-secret";
+const APP_KEYS = generateKeyPairSync("ec", { namedCurve: "P-256" });
+const SIGNING_KEY = APP_KEYS.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
 
 async function claims(token: string): Promise<Record<string, unknown>> {
-	const { payload } = await jwtVerify(token, new TextEncoder().encode(SECRET), {
+	const { payload } = await jwtVerify(token, APP_KEYS.publicKey, {
+		algorithms: ["ES256"],
 		audience: "waniwani-agent-runtime",
 		issuer: "waniwani:agent",
 	});
@@ -24,7 +27,7 @@ function chunks(values: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
 
 test("mints a session token the runtime's channel verifies", async () => {
 	const token = await mintSessionToken({
-		secret: SECRET,
+		signingKey: SIGNING_KEY,
 		sub: "visitor-42",
 		environmentId: "11111111-1111-4111-8111-111111111111",
 		channelId: "33333333-3333-4333-8333-333333333333",
@@ -32,7 +35,7 @@ test("mints a session token the runtime's channel verifies", async () => {
 	});
 
 	const [header] = token.split(".");
-	expect(JSON.parse(Buffer.from(String(header), "base64url").toString()).alg).toBe("HS256");
+	expect(JSON.parse(Buffer.from(String(header), "base64url").toString()).alg).toBe("ES256");
 
 	const payload = await claims(token);
 	expect(payload.sub).toBe("visitor-42");
@@ -45,7 +48,7 @@ test("mints a session token the runtime's channel verifies", async () => {
 
 test("leaves out the claims it was not given", async () => {
 	const payload = await claims(
-		await mintSessionToken({ secret: SECRET, sub: "anonymous" }),
+		await mintSessionToken({ signingKey: SIGNING_KEY, sub: "anonymous" }),
 	);
 	expect(payload.sub).toBe("anonymous");
 	expect("environmentId" in payload).toBe(false);
@@ -54,9 +57,25 @@ test("leaves out the claims it was not given", async () => {
 });
 
 test("mints a different jti every time", async () => {
-	const one = await claims(await mintSessionToken({ secret: SECRET, sub: "anonymous" }));
-	const two = await claims(await mintSessionToken({ secret: SECRET, sub: "anonymous" }));
+	const one = await claims(await mintSessionToken({ signingKey: SIGNING_KEY, sub: "anonymous" }));
+	const two = await claims(await mintSessionToken({ signingKey: SIGNING_KEY, sub: "anonymous" }));
 	expect(one.jti).not.toBe(two.jti);
+});
+
+test("accepts a signing key stored with literal \\n sequences", async () => {
+	const token = await mintSessionToken({
+		signingKey: SIGNING_KEY.replaceAll("\n", "\\n"),
+		sub: "anonymous",
+	});
+	expect((await claims(token)).sub).toBe("anonymous");
+});
+
+test("refuses a signing key that is not a P-256 private key", async () => {
+	const ed25519 = generateKeyPairSync("ed25519")
+		.privateKey.export({ type: "pkcs8", format: "pem" })
+		.toString();
+	await expect(mintSessionToken({ signingKey: ed25519, sub: "anonymous" })).rejects.toThrow();
+	await expect(mintSessionToken({ signingKey: "ci-agent-secret", sub: "anonymous" })).rejects.toThrow();
 });
 
 test("frames chunks as server-sent events and terminates the stream", async () => {

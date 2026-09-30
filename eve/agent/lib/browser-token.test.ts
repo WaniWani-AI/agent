@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createHmac } from "node:crypto";
+import { createHmac, generateKeyPairSync, type KeyObject, sign } from "node:crypto";
 import type { SessionAuthContext } from "eve/context";
 import { browserOperation, isNativeSession, verifyBrowserToken } from "./browser-token.js";
 
-const SECRET = "browser-token-test-secret-0123456789abcdef";
+const APP_KEYS = generateKeyPairSync("ec", { namedCurve: "P-256" });
+const PUBLIC_PEM = APP_KEYS.publicKey.export({ type: "spki", format: "pem" }).toString();
 const RUNTIME = "https://runtime.example";
 const SID = "sess_abc123";
 const SHOP = "https://shop.example";
@@ -14,13 +15,18 @@ function b64url(value: string | Buffer): string {
 
 function mint(
 	claims: Record<string, unknown>,
-	options: { secret?: string; alg?: string; signature?: string } = {},
+	options: { key?: KeyObject; alg?: string; signature?: string } = {},
 ): string {
-	const header = b64url(JSON.stringify({ alg: options.alg ?? "HS256", typ: "JWT" }));
+	const header = b64url(JSON.stringify({ alg: options.alg ?? "ES256", typ: "JWT" }));
 	const payload = b64url(JSON.stringify(claims));
 	const signature =
 		options.signature ??
-		createHmac("sha256", options.secret ?? SECRET).update(`${header}.${payload}`).digest("base64url");
+		b64url(
+			sign("sha256", Buffer.from(`${header}.${payload}`), {
+				key: options.key ?? APP_KEYS.privateKey,
+				dsaEncoding: "ieee-p1363",
+			}),
+		);
 	return `${header}.${payload}.${signature}`;
 }
 
@@ -54,8 +60,8 @@ function request(method: string, path: string, headers: Record<string, string> =
 	return new Request(`${RUNTIME}${path}`, { method, headers });
 }
 
-async function verify(token: string, req: Request, secret = SECRET) {
-	return await verifyBrowserToken({ token, request: req, secret });
+async function verify(token: string, req: Request, publicKey = PUBLIC_PEM) {
+	return await verifyBrowserToken({ token, request: req, publicKey });
 }
 
 let savedRegion: string | undefined;
@@ -159,7 +165,7 @@ describe("verifyBrowserToken: bad tokens", () => {
 	const req = () => request("POST", `/eve/v1/session/${SID}`);
 
 	test("a null token is refused", async () => {
-		expect(await verifyBrowserToken({ token: null, request: req(), secret: SECRET })).toBeNull();
+		expect(await verifyBrowserToken({ token: null, request: req(), publicKey: PUBLIC_PEM })).toBeNull();
 	});
 
 	test("an expired token is refused", async () => {
@@ -167,8 +173,16 @@ describe("verifyBrowserToken: bad tokens", () => {
 		expect(await verify(mint(browserClaims({ iat: now - 7200, exp: now - 3600 })), req())).toBeNull();
 	});
 
-	test("a token signed with another secret is refused", async () => {
-		expect(await verify(mint(browserClaims(), { secret: "some-other-secret-value-xyz" }), req())).toBeNull();
+	test("a token signed with another key is refused", async () => {
+		const other = generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey;
+		expect(await verify(mint(browserClaims(), { key: other }), req())).toBeNull();
+	});
+
+	test("an HS256 token keyed with the public key itself is refused", async () => {
+		const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+		const payload = b64url(JSON.stringify(browserClaims()));
+		const signature = createHmac("sha256", PUBLIC_PEM).update(`${header}.${payload}`).digest("base64url");
+		expect(await verify(`${header}.${payload}.${signature}`, req())).toBeNull();
 	});
 
 	test("a token with a tampered signature is refused", async () => {

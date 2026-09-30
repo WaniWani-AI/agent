@@ -32,7 +32,7 @@ services:
 
       # Required. Your environment key, which is both your identity to WaniWani
       # and the credential your backend presents to this runtime. Mounted from
-      # ./.secrets. Setting WANIWANI_AGENT_SECRET as well refuses to start:
+      # ./.secrets. Setting WANIWANI_APP_PUBLIC_KEY as well refuses to start:
       # that is the WaniWani-hosted form, which takes a JWT per visitor instead.
       WANIWANI_API_KEY_FILE: /run/secrets/api_key
 

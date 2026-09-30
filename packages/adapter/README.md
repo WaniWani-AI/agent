@@ -63,12 +63,16 @@ the runtime, and never the browser's key.
 Framework-free, and what a WaniWani-hosted chat route calls in process.
 
 ```ts
-mintSessionToken({ secret, sub, environmentId?, channelId?, sid? }): Promise<string>
+mintSessionToken({ signingKey, sub, environmentId?, channelId?, sid? }): Promise<string>
 runTurn({ eveUrl, credential, visitorId?, message, sessionId?, clientContext?, extra?, signal? })
 cancelTurn({ eveUrl, credential, sessionId }): Promise<void>
 runtimeHealth({ eveUrl, credential }): Promise<unknown>
 encodeSse(chunks): ReadableStream<Uint8Array>
 ```
+
+`mintSessionToken` signs ES256 with `signingKey`, the app's P-256 private key as a PKCS8 PEM
+(`-----BEGIN PRIVATE KEY-----`). Literal `\n` sequences in it are read as newlines. The runtime
+verifies with the matching public key in `WANIWANI_APP_PUBLIC_KEY`.
 
 `runTurn` answers `{ sessionId, chunks, cancel }` as soon as the runtime has taken the turn, and
 the chunks arrive as the model writes them. `credential` is the environment key on a self-hosted

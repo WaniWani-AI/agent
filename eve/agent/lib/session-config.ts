@@ -40,6 +40,16 @@ export type SessionConfig = {
 
 export type Fetched = { etag?: string; value: SessionConfig };
 
+export class ConfigFetchError extends Error {
+	constructor(
+		message: string,
+		readonly status: number,
+	) {
+		super(message);
+		this.name = "ConfigFetchError";
+	}
+}
+
 async function unwrap(response: Response): Promise<unknown> {
 	const body: unknown = await response.json().catch(() => null);
 	const envelope =
@@ -51,8 +61,9 @@ async function unwrap(response: Response): Promise<unknown> {
 			typeof envelope.message === "string"
 				? envelope.message
 				: response.statusText;
-		throw new Error(
+		throw new ConfigFetchError(
 			`Agent configuration failed (${response.status}): ${detail}`,
+			response.status,
 		);
 	}
 	return envelope.data;
@@ -123,10 +134,10 @@ export async function fetchSessionConfig(input: {
 	tenant: Tenant;
 	previous?: Fetched;
 }): Promise<Fetched> {
-	const { url, authorization } = configRequest(input.tenant);
+	const { url, headers } = configRequest(input.tenant);
 	const response = await fetch(url, {
 		headers: {
-			authorization,
+			...headers,
 			...(input.previous?.etag
 				? { "if-none-match": input.previous.etag }
 				: {}),

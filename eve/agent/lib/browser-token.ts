@@ -1,5 +1,5 @@
 import type { SessionAuthContext } from "eve/context";
-import { verifyJwtHmac } from "eve/channels/auth";
+import { verifyJwtEcdsa } from "eve/channels/auth";
 
 export const BROWSER_AUDIENCE = "waniwani-agent-browser";
 export const NATIVE_TRANSPORT = "eve-native";
@@ -52,13 +52,13 @@ async function carriesServerOnlyFields(request: Request): Promise<boolean> {
 export async function verifyBrowserToken(input: {
 	token: string | null;
 	request: Request;
-	secret: string;
+	publicKey: string;
 }): Promise<SessionAuthContext | null> {
-	const verified = await verifyJwtHmac(input.token, {
-		algorithm: "HS256",
+	const verified = await verifyJwtEcdsa(input.token, {
+		algorithm: "ES256",
 		audiences: [BROWSER_AUDIENCE],
 		issuer: "waniwani:agent",
-		secret: input.secret,
+		publicKey: input.publicKey,
 		claims: { purpose: ["browser"], transport: [NATIVE_TRANSPORT] },
 	});
 	if (!verified.ok) return null;

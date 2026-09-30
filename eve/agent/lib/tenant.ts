@@ -7,7 +7,7 @@ export const ANONYMOUS = "anonymous";
 const SERVICE_ISSUER = "waniwani:agent-runtime";
 const SERVICE_TOKEN_LIFETIME_SECONDS = 60;
 
-export type Tenant = { key: string; environmentId?: string };
+export type Tenant = { key: string; environmentId?: string; grant?: string };
 
 export type ChannelSource = { id: string; label: string | null; type?: string | null };
 
@@ -16,13 +16,18 @@ export type CredentialForm = "self-hosted" | "hosted";
 
 export function credentialForm(): CredentialForm {
 	const selfHosted = Boolean(process.env.WANIWANI_API_KEY);
-	const hosted = Boolean(process.env.WANIWANI_AGENT_SECRET);
+	const hosted = Boolean(process.env.WANIWANI_APP_PUBLIC_KEY);
 	if (selfHosted === hosted) {
 		throw new Error(
-			"Set exactly one of WANIWANI_API_KEY (self-hosted) and WANIWANI_AGENT_SECRET (hosted)",
+			"Set exactly one of WANIWANI_API_KEY (self-hosted) and WANIWANI_APP_PUBLIC_KEY (hosted)",
 		);
 	}
 	return selfHosted ? "self-hosted" : "hosted";
+}
+
+/** A PEM pasted into Vercel's env editor can arrive with literal `\n` sequences. */
+export function appPublicKey(): string {
+	return (process.env.WANIWANI_APP_PUBLIC_KEY ?? "").replaceAll("\\n", "\n");
 }
 
 function attribute(
@@ -46,10 +51,15 @@ export function tenantOf(auth: SessionAuth | undefined): Tenant {
 	}
 	if (!environmentId) {
 		throw new Error(
-			"Session credential names no environment, and WANIWANI_AGENT_SECRET requires one",
+			"Session credential names no environment, and WANIWANI_APP_PUBLIC_KEY requires one",
 		);
 	}
-	return { key: environmentId, environmentId };
+	const grant = auth?.current?.attributes.grant ?? auth?.initiator?.attributes.grant;
+	return {
+		key: environmentId,
+		environmentId,
+		...(typeof grant === "string" && grant ? { grant } : {}),
+	};
 }
 
 /**
@@ -158,14 +168,21 @@ export function serviceRequest(input: { environmentId: string; path: string }): 
 
 export function configRequest(tenant: Tenant): {
 	url: string;
-	authorization: string;
+	headers: Record<string, string>;
 } {
 	const path = `${appBaseUrl()}/api/mcp/agent/config`;
 
 	if (!tenant.environmentId) {
 		const apiKey = process.env.WANIWANI_API_KEY;
 		if (!apiKey) throw new Error("WANIWANI_API_KEY is not set");
-		return { url: path, authorization: `Bearer ${apiKey}` };
+		return { url: path, headers: { authorization: `Bearer ${apiKey}` } };
 	}
-	return serviceRequest({ environmentId: tenant.environmentId, path: "/api/mcp/agent/config" });
+	const { url, authorization } = serviceRequest({
+		environmentId: tenant.environmentId,
+		path: "/api/mcp/agent/config",
+	});
+	return {
+		url,
+		headers: { authorization, ...(tenant.grant ? { "x-waniwani-grant": tenant.grant } : {}) },
+	};
 }

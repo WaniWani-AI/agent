@@ -28,7 +28,7 @@ const ENV_KEYS = [
 	"WANIWANI_API_URL",
 	"WANIWANI_SERVICE_PRIVATE_KEY",
 	"WANIWANI_REGION",
-	"WANIWANI_AGENT_SECRET",
+	"WANIWANI_APP_PUBLIC_KEY",
 	"WANIWANI_API_KEY",
 ] as const;
 const saved = new Map<string, string | undefined>();
@@ -44,7 +44,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function principal(attributes: Record<string, string>): SessionAuthContext {
 	return {
 		attributes,
-		authenticator: "jwt-hmac",
+		authenticator: "jwt-ecdsa",
 		principalId: "waniwani:agent:visitor_1",
 		principalType: "service",
 		subject: "visitor_1",
@@ -128,7 +128,7 @@ beforeEach(() => {
 	process.env.WANIWANI_API_URL = "http://app.test";
 	process.env.WANIWANI_SERVICE_PRIVATE_KEY = PRIVATE_PEM;
 	process.env.WANIWANI_REGION = "us";
-	process.env.WANIWANI_AGENT_SECRET = "tools-test-secret";
+	process.env.WANIWANI_APP_PUBLIC_KEY = "tools-test-app-key";
 	delete process.env.WANIWANI_API_KEY;
 	steps = [];
 	barrierGate = undefined;

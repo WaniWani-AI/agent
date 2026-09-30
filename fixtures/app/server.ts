@@ -8,6 +8,8 @@ const KEY = "Bearer wwk_test";
 const INGEST_KEY = "Bearer wwp_test";
 const INGEST_PATH = "/api/mcp/events/v2/batch";
 const PUBLIC_KEY_FILE = process.env.SERVICE_PUBLIC_KEY_FILE;
+const APP_PUBLIC_KEY_FILE = process.env.APP_PUBLIC_KEY_FILE;
+const CONFIG_PATH = "/api/mcp/agent/config";
 
 const BYO = {
 	mode: "byo",
@@ -28,6 +30,28 @@ const state = {
 
 const events: unknown[] = [];
 const reports: { sessionId: string; environmentId: string; events: { eventId: string; kind: string; turnId: string }[] }[] = [];
+
+/** Mirrors the app: a service-token config read also needs a live token the app signed for that environment. */
+function granted(grant: string | undefined, environmentId: unknown): boolean {
+	if (!APP_PUBLIC_KEY_FILE || !grant) return false;
+	const [head, body, signature] = grant.split(".");
+	if (!head || !body || !signature) return false;
+	try {
+		const header = JSON.parse(Buffer.from(head, "base64url").toString());
+		const claims = JSON.parse(Buffer.from(body, "base64url").toString());
+		if (header.alg !== "ES256" || claims.iss !== "waniwani:agent") return false;
+		if (typeof claims.exp !== "number" || claims.exp * 1000 < Date.now()) return false;
+		if (claims.environmentId !== environmentId) return false;
+		return verify(
+			"sha256",
+			Buffer.from(`${head}.${body}`),
+			{ key: createPublicKey(readFileSync(APP_PUBLIC_KEY_FILE, "utf8")), dsaEncoding: "ieee-p1363" },
+			Buffer.from(signature, "base64url"),
+		);
+	} catch {
+		return false;
+	}
+}
 
 /** Mirrors the app: an environment key, or a service token this region trusts. */
 function authorized(header: string | undefined): boolean {
@@ -78,8 +102,16 @@ app.use((request, response, next) => {
 	if (request.path === INGEST_PATH && request.headers.authorization === INGEST_KEY) {
 		return next();
 	}
-	if (!authorized(request.headers.authorization)) {
+	const { authorization } = request.headers;
+	if (!authorized(authorization)) {
 		return response.status(401).json({ success: false, message: "UNAUTHORIZED" });
+	}
+	if (
+		request.path === CONFIG_PATH &&
+		authorization !== KEY &&
+		!granted(request.get("x-waniwani-grant"), request.query.environmentId)
+	) {
+		return response.status(401).json({ success: false, message: "GRANT_REQUIRED" });
 	}
 	if (state.failing) {
 		return response.status(500).json({ success: false, message: "FIXTURE_DOWN" });
@@ -87,7 +119,7 @@ app.use((request, response, next) => {
 	next();
 });
 
-app.get("/api/mcp/agent/config", (request, response) => {
+app.get(CONFIG_PATH, (request, response) => {
 	const data = payload();
 	const etag = `"${createHash("sha256").update(JSON.stringify(data)).digest("base64url").slice(0, 27)}"`;
 	response.setHeader("etag", etag);

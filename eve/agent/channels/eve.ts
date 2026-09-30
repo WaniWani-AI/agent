@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { SessionAuthContext } from "eve/context";
-import { extractBearerToken, verifyJwtHmac } from "eve/channels/auth";
+import { extractBearerToken, verifyJwtEcdsa } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
 import { decodedSegment, verifyBrowserToken } from "../lib/browser-token.js";
 import {
@@ -10,7 +10,7 @@ import {
 	REFUSAL_CONTEXT,
 } from "../lib/guardrail.js";
 import { publishedNow } from "../lib/published.js";
-import { ANONYMOUS, credentialForm, tenantOf } from "../lib/tenant.js";
+import { ANONYMOUS, appPublicKey, credentialForm, tenantOf } from "../lib/tenant.js";
 
 type Attributes = Readonly<Record<string, string | readonly string[]>>;
 
@@ -37,6 +37,11 @@ function withBackendHeaders(request: Request, attributes: Attributes): Attribute
 		...(extra ? { extra } : {}),
 		...(context ? { context } : {}),
 	};
+}
+
+/** The app reads a hosted environment's config only for a caller holding a live token for it. */
+function withGrant(auth: SessionAuthContext, token: string | null): SessionAuthContext {
+	return token ? { ...auth, attributes: { ...auth.attributes, grant: token } } : auth;
 }
 
 async function guarded(caller: SessionAuthContext, text: string) {
@@ -83,15 +88,15 @@ export default eveChannel({
 				};
 			}
 
-			const secret = process.env.WANIWANI_AGENT_SECRET ?? "";
-			const browser = await verifyBrowserToken({ token, request, secret });
-			if (browser) return browser;
+			const publicKey = appPublicKey();
+			const browser = await verifyBrowserToken({ token, request, publicKey });
+			if (browser) return withGrant(browser, token);
 
-			const verified = await verifyJwtHmac(token, {
-				algorithm: "HS256",
+			const verified = await verifyJwtEcdsa(token, {
+				algorithm: "ES256",
 				audiences: ["waniwani-agent-runtime"],
 				issuer: "waniwani:agent",
-				secret,
+				publicKey,
 			});
 			if (!verified.ok) return null;
 			const { sessionAuth } = verified;
@@ -101,7 +106,10 @@ export default eveChannel({
 			const addressed = addressedSession(request);
 			if (addressed !== undefined && sessionAuth.attributes.sid !== addressed) return null;
 
-			return { ...sessionAuth, attributes: withBackendHeaders(request, sessionAuth.attributes) };
+			return withGrant(
+				{ ...sessionAuth, attributes: withBackendHeaders(request, sessionAuth.attributes) },
+				token,
+			);
 		},
 	],
 	onMessage: (ctx, message) =>

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createHmac, generateKeyPairSync } from "node:crypto";
+import { createHmac, generateKeyPairSync, type KeyObject, sign } from "node:crypto";
 import channel from "../channels/eve.js";
 import { REFUSAL_CONTEXT } from "./guardrail.js";
 
-const SECRET = "channel-auth-test-secret-0123456789abcdef";
+const APP_KEYS = generateKeyPairSync("ec", { namedCurve: "P-256" });
+const APP_PUBLIC_PEM = APP_KEYS.publicKey.export({ type: "spki", format: "pem" }).toString();
 const API_KEY = "wwk_self_hosted_test_key";
 const RUNTIME = "https://runtime.example";
 const SID = "sess_chan_1";
@@ -28,7 +29,14 @@ function b64url(value: string | Buffer): string {
 	return Buffer.from(value).toString("base64url");
 }
 
-function mint(claims: Record<string, unknown>, secret = SECRET): string {
+function mint(claims: Record<string, unknown>, key: KeyObject = APP_KEYS.privateKey): string {
+	const header = b64url(JSON.stringify({ alg: "ES256", typ: "JWT" }));
+	const payload = b64url(JSON.stringify(claims));
+	const signature = sign("sha256", Buffer.from(`${header}.${payload}`), { key, dsaEncoding: "ieee-p1363" });
+	return `${header}.${payload}.${b64url(signature)}`;
+}
+
+function mintHmac(claims: Record<string, unknown>, secret: string): string {
 	const header = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
 	const payload = b64url(JSON.stringify(claims));
 	const signature = createHmac("sha256", secret).update(`${header}.${payload}`).digest("base64url");
@@ -182,7 +190,7 @@ const info = (token: string | null) =>
 	call({ method: "GET", pattern: "/eve/v1/info", path: "/eve/v1/info", token });
 
 const ENV_KEYS = [
-	"WANIWANI_AGENT_SECRET",
+	"WANIWANI_APP_PUBLIC_KEY",
 	"WANIWANI_API_KEY",
 	"WANIWANI_REGION",
 	"WANIWANI_API_URL",
@@ -200,7 +208,7 @@ let lakeraCalls = 0;
 
 beforeEach(() => {
 	for (const key of ENV_KEYS) saved.set(key, process.env[key]);
-	process.env.WANIWANI_AGENT_SECRET = SECRET;
+	process.env.WANIWANI_APP_PUBLIC_KEY = APP_PUBLIC_PEM;
 	delete process.env.WANIWANI_API_KEY;
 	process.env.WANIWANI_REGION = "us";
 	process.env.WANIWANI_API_URL = "http://app.test";
@@ -298,7 +306,7 @@ describe("hosted runtime, browser token", () => {
 		expect((await send(browserToken({ iat: now() - 7200, exp: now() - 3600 }))).status).toBe(401);
 	});
 
-	test("a token under the wrong secret is refused", async () => {
+	test("a token under the wrong key is refused", async () => {
 		const forged = mint(
 			{
 				iss: "waniwani:agent",
@@ -312,7 +320,7 @@ describe("hosted runtime, browser token", () => {
 				sid: SID,
 				region: "us",
 			},
-			"not-the-runtime-secret-at-all",
+			generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey,
 		);
 		expect((await send(forged)).status).toBe(401);
 	});
@@ -492,14 +500,62 @@ describe("hosted runtime, server token", () => {
 	});
 });
 
+function grantOf(outcome: Outcome): unknown {
+	const auth = Reflect.get(Object(outcome.captured.sends[0]?.options), "auth");
+	return Reflect.get(Object(Reflect.get(Object(auth), "attributes")), "grant");
+}
+
+describe("hosted runtime, app key and config grant", () => {
+	test("a browser token rides along as the grant", async () => {
+		const token = browserToken();
+		const outcome = await send(token);
+		expect(outcome.status).toBe(202);
+		expect(grantOf(outcome)).toBe(token);
+	});
+
+	test("a server token rides along as the grant", async () => {
+		const token = serverToken();
+		const outcome = await send(token);
+		expect(outcome.status).toBe(202);
+		expect(grantOf(outcome)).toBe(token);
+	});
+
+	test("a grant claimed inside the token is replaced by the token itself", async () => {
+		const token = serverToken({ grant: "someone-elses-token" });
+		expect(grantOf(await send(token))).toBe(token);
+	});
+
+	test("an HS256 server token keyed with the public key is refused", async () => {
+		const forged = mintHmac(
+			{
+				iss: "waniwani:agent",
+				aud: "waniwani-agent-runtime",
+				sub: "visitor_1",
+				iat: now(),
+				exp: now() + 300,
+				environmentId: "env_1",
+				sid: SID,
+			},
+			APP_PUBLIC_PEM,
+		);
+		expect((await send(forged)).status).toBe(401);
+		expect((await create(forged)).status).toBe(401);
+	});
+
+	test("a public key stored with literal \\n sequences still verifies", async () => {
+		process.env.WANIWANI_APP_PUBLIC_KEY = APP_PUBLIC_PEM.replaceAll("\n", "\\n");
+		expect((await send(serverToken())).status).toBe(202);
+	});
+});
+
 describe("self-hosted runtime", () => {
 	beforeEach(() => {
-		delete process.env.WANIWANI_AGENT_SECRET;
+		delete process.env.WANIWANI_APP_PUBLIC_KEY;
 		process.env.WANIWANI_API_KEY = API_KEY;
 	});
 
 	test("never accepts a browser token, even one signed with the API key", async () => {
-		const token = mint(
+		const token = mintHmac(
 			{
 				iss: "waniwani:agent",
 				aud: "waniwani-agent-browser",
@@ -521,5 +577,11 @@ describe("self-hosted runtime", () => {
 
 	test("still accepts its own API key", async () => {
 		expect((await send(API_KEY)).status).toBe(202);
+	});
+
+	test("its API key never becomes a grant", async () => {
+		const outcome = await send(API_KEY);
+		expect(outcome.status).toBe(202);
+		expect(grantOf(outcome)).toBeUndefined();
 	});
 });
