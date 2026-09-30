@@ -220,3 +220,48 @@ describe("contextHeader parsing", () => {
 		expect(Object.prototype.hasOwnProperty.call(result, "__proto__")).toBe(true);
 	});
 });
+
+const DOCS = [
+	{ documentId: "0b6f3c1e-2a4d-4e8b-9c1f-3d5e7a9b1c2d", filename: "quote.pdf", mediaType: "application/pdf" },
+];
+
+describe("documentsHeader", () => {
+	test("a JSON array of documents becomes waniwani/documents", () => {
+		expect(mcpMeta(base({ documentsHeader: JSON.stringify(DOCS) }))["waniwani/documents"]).toEqual(DOCS);
+	});
+
+	test("absent documentsHeader carries no waniwani/documents key", () => {
+		expect("waniwani/documents" in mcpMeta(base())).toBe(false);
+		expect("waniwani/documents" in mcpMeta(base({ documentsHeader: undefined }))).toBe(false);
+	});
+
+	test("an empty array carries no waniwani/documents key", () => {
+		expect("waniwani/documents" in mcpMeta(base({ documentsHeader: "[]" }))).toBe(false);
+	});
+
+	const malformed: Array<[string, unknown]> = [
+		["not JSON", "[{"],
+		["an object", JSON.stringify({ documents: DOCS })],
+		["a number", 7],
+		["an array value", DOCS],
+	];
+	for (const [label, documentsHeader] of malformed) {
+		test(`malformed documentsHeader (${label}) contributes nothing and does not throw`, () => {
+			expect("waniwani/documents" in mcpMeta(base({ documentsHeader }))).toBe(false);
+		});
+	}
+
+	test("documents and extra travel together", () => {
+		const result = mcpMeta(
+			base({ documentsHeader: JSON.stringify(DOCS), extraHeader: JSON.stringify({ plan: "gold" }) }),
+		);
+		expect(result["waniwani/documents"]).toEqual(DOCS);
+		expect(result["waniwani/extra"]).toEqual({ plan: "gold" });
+	});
+
+	test("the runtime's own keys stay the runtime's with documents present", () => {
+		const result = mcpMeta(base({ documentsHeader: JSON.stringify(DOCS) }));
+		expect(result["waniwani/sessionId"]).toBe("wrun_1");
+		expect(result["waniwani/turnCount"]).toBe(3);
+	});
+});

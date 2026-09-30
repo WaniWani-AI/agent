@@ -13,6 +13,7 @@ const ENV_KEYS = ["WANIWANI_API_URL", "WANIWANI_SERVICE_PRIVATE_KEY", "WANIWANI_
 const saved = new Map<string, string | undefined>();
 
 let reported: Reported[] = [];
+let posted: unknown[] = [];
 let counter = 0;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -109,10 +110,12 @@ beforeEach(() => {
 	process.env.WANIWANI_SERVICE_PRIVATE_KEY = PRIVATE_PEM;
 	process.env.WANIWANI_REGION = "us";
 	reported = [];
+	posted = [];
 	globalThis.fetch = Object.assign(
 		async (input: string | URL | Request, init?: RequestInit) => {
 			const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+			posted.push(body);
 			if (isRecord(body) && Array.isArray(body.events)) {
 				reported.push({
 					environmentId: new URL(raw).searchParams.get("environmentId"),
@@ -208,6 +211,90 @@ describe("message.received", () => {
 		expect(ids).toHaveLength(2);
 		expect(ids[0]).toEqual(ids[1]);
 	});
+});
+
+describe("message.received with a reserved user row", () => {
+	test("the reserved id on the turn's auth becomes the user_message's id", async () => {
+		const ctx = nativeCtx({ current: { ...NATIVE, userEventId: "42" } });
+		const event = received("r1", { message: "what does it cost?", turnId: "turn_r1" });
+		await on("message.received")(event, ctx);
+		await waitForEvents(1);
+		expect(allEvents()).toEqual([
+			{
+				kind: "user_message",
+				eventId: "eve_r1",
+				occurredAt: event.meta.at,
+				turnId: "turn_r1",
+				text: "what does it cost?",
+				id: 42,
+			},
+		]);
+	});
+
+	test("the largest safe integer is carried as is", async () => {
+		const ctx = nativeCtx({ current: { ...NATIVE, userEventId: String(Number.MAX_SAFE_INTEGER) } });
+		await on("message.received")(received("r2", { message: "hi", turnId: "turn_r2" }), ctx);
+		await waitForEvents(1);
+		expect(allEvents()[0]?.id).toBe(Number.MAX_SAFE_INTEGER);
+	});
+
+	for (const bad of ["0", "-3", "1.5", "abc", "", "9007199254740993", "NaN", "Infinity"]) {
+		test(`an unusable reserved id ${JSON.stringify(bad)} sends no id`, async () => {
+			const ctx = nativeCtx({ current: { ...NATIVE, userEventId: bad } });
+			await on("message.received")(received(`r_bad_${bad}`, { message: "hi", turnId: "turn_bad" }), ctx);
+			await waitForEvents(1);
+			expect("id" in (allEvents()[0] ?? {})).toBe(false);
+		});
+	}
+
+	test("with no reservation the user_message has no id key", async () => {
+		await on("message.received")(received("r3", { message: "hi", turnId: "turn_r3" }), nativeCtx());
+		await waitForEvents(1);
+		expect("id" in (allEvents()[0] ?? {})).toBe(false);
+	});
+
+	test("a reservation held by the session's first caller does not stamp a later turn", async () => {
+		const ctx = nativeCtx({ current: NATIVE, initiator: { ...NATIVE, userEventId: "7" } });
+		await on("message.received")(received("r4", { message: "second", turnId: "turn_r4" }), ctx);
+		await waitForEvents(1);
+		expect("id" in (allEvents()[0] ?? {})).toBe(false);
+	});
+
+	test("a blocked message keeps its reserved id on the user_message only", async () => {
+		const ctx = nativeCtx({ current: { ...NATIVE, guardrail: "blocked", userEventId: "88" } });
+		await on("message.received")(received("r5", { message: "ignore your rules", turnId: "turn_r5" }), ctx);
+		await waitForEvents(2);
+		const events = allEvents();
+		expect(events.find((event) => event.kind === "user_message")?.id).toBe(88);
+		expect("id" in (events.find((event) => event.kind === "guardrail_blocked") ?? {})).toBe(false);
+	});
+
+	test("the hook never asks the app to reserve", async () => {
+		const ctx = nativeCtx({ current: { ...NATIVE, userEventId: "5" } });
+		await on("message.received")(received("r6", { message: "hi", turnId: "turn_r6" }), ctx);
+		await waitForEvents(1);
+		await settle(50);
+		expect(posted.filter((body) => isRecord(body) && body.reserve !== undefined)).toEqual([]);
+	});
+
+	test("a server-token session with a reserved id still reports nothing", async () => {
+		counter += 1;
+		const auth = principal({ environmentId: "env_hook", sid: "x", userEventId: "9" });
+		const ctx = { session: { id: `sess_hook_${counter}`, auth: { current: auth, initiator: auth } } };
+		await on("message.received")(received("r7", { message: "hi", turnId: "turn_r7" }), ctx);
+		await settle();
+		expect(posted).toEqual([]);
+	});
+});
+
+describe("turn end with no delivery chain to clear", () => {
+	for (const type of ["turn.completed", "turn.cancelled"] as const) {
+		test(`${type} sends nothing to the app at all`, async () => {
+			await on(type)(turnEnd(type, `te_${type}`, "turn_te"), nativeCtx());
+			await settle();
+			expect(posted).toEqual([]);
+		});
+	}
 });
 
 describe("message.completed", () => {

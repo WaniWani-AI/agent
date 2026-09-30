@@ -2,7 +2,7 @@ import type { SessionAuth } from "eve/context";
 import { defineHook } from "eve/hooks";
 import { isNativeSession } from "../lib/browser-token.js";
 import { GUARDRAIL_BLOCKED } from "../lib/guardrail.js";
-import { forgetTurn, report } from "../lib/reporting.js";
+import { report } from "../lib/reporting.js";
 import { waitUntil } from "../lib/wait-until.js";
 
 type Meta = { meta: { id: string; at: string } };
@@ -25,9 +25,7 @@ function eventId(event: Meta): string {
 function endTurn(input: { ctx: Ctx; event: Meta; turnId: string; error?: string }): void {
 	stepModels.delete(input.ctx.session.id);
 	const session = sessionOf(input.ctx);
-	if (!session) return;
-	forgetTurn({ ...session, turnId: input.turnId });
-	if (input.error === undefined) return;
+	if (!session || input.error === undefined) return;
 	waitUntil(
 		report(session, [
 			{
@@ -41,9 +39,14 @@ function endTurn(input: { ctx: Ctx; event: Meta; turnId: string; error?: string 
 	);
 }
 
+function reservedId(ctx: Ctx): number | undefined {
+	const id = Number(ctx.session.auth.current?.attributes.userEventId);
+	return Number.isSafeInteger(id) && id > 0 ? id : undefined;
+}
+
 /**
- * Nothing here is awaited on the way to the model: deliveries run on a
- * per-session chain, and the tool barrier is what waits for the user row.
+ * Nothing here is awaited on the way to the model. Order does not depend on
+ * delivery either: the channel reserved the user row's place before the turn.
  */
 export default defineHook({
 	events: {
@@ -51,6 +54,7 @@ export default defineHook({
 			const session = sessionOf(ctx);
 			if (!session || event.data.kind === "execution.background_task") return;
 			const { turnId } = event.data;
+			const id = reservedId(ctx);
 			waitUntil(report(session, [
 				{
 					kind: "user_message",
@@ -58,6 +62,7 @@ export default defineHook({
 					occurredAt: event.meta.at,
 					turnId,
 					text: event.data.message,
+					...(id !== undefined ? { id } : {}),
 				},
 				...(ctx.session.auth.current?.attributes.guardrail === GUARDRAIL_BLOCKED
 					? [

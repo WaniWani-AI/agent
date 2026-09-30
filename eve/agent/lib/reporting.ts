@@ -1,7 +1,14 @@
 import { serviceRequest } from "./tenant.js";
 
 export type ReportEvent =
-	| { kind: "user_message"; eventId: string; occurredAt: string; turnId: string; text: string }
+	| {
+			kind: "user_message";
+			eventId: string;
+			occurredAt: string;
+			turnId: string;
+			text: string;
+			id?: number;
+	  }
 	| { kind: "assistant_message"; eventId: string; occurredAt: string; turnId: string; text: string }
 	| { kind: "guardrail_blocked"; eventId: string; occurredAt: string; turnId: string }
 	| {
@@ -24,20 +31,24 @@ export type UsageStep = {
 
 type Session = { environmentId: string; sessionId: string };
 
-const ATTEMPTS = 4;
-const BASE_DELAY_MS = 200;
+const DELIVERY_WINDOW_MS = 30_000;
+const BASE_DELAY_MS = 250;
+const MAX_DELAY_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 5_000;
+const RESERVE_TIMEOUT_MS = 1_000;
 
 /** One chain per session keeps the app's insert order equal to stream order. */
 const chains = new Map<string, Promise<void>>();
 
-const userRows = new Map<string, Promise<boolean>>();
-
-function key(session: Session, turnId?: string): string {
-	return `${session.environmentId}\u0000${session.sessionId}${turnId ? `\u0000${turnId}` : ""}`;
+function key(session: Session): string {
+	return `${session.environmentId}\u0000${session.sessionId}`;
 }
 
-async function post(session: Session, body: Record<string, unknown>): Promise<Response> {
+async function post(
+	session: Session,
+	body: Record<string, unknown>,
+	timeoutMs: number,
+): Promise<Response> {
 	const { url, authorization } = serviceRequest({
 		environmentId: session.environmentId,
 		path: "/api/mcp/agent/events",
@@ -46,38 +57,8 @@ async function post(session: Session, body: Record<string, unknown>): Promise<Re
 		method: "POST",
 		headers: { authorization, "content-type": "application/json" },
 		body: JSON.stringify({ sessionId: session.sessionId, ...body }),
-		signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+		signal: AbortSignal.timeout(timeoutMs),
 	});
-}
-
-/** The app deduplicates on each event id, so a retry after a lost response writes nothing twice. */
-async function deliver(session: Session, events: ReportEvent[]): Promise<boolean> {
-	let delay = BASE_DELAY_MS;
-	for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
-		try {
-			const response = await post(session, { events });
-			if (response.ok) return true;
-			if (response.status < 500 && response.status !== 429) {
-				console.error("[reporting] the app refused a report", {
-					sessionId: session.sessionId,
-					status: response.status,
-				});
-				return false;
-			}
-		} catch (error) {
-			if (attempt === ATTEMPTS) {
-				console.error("[reporting] delivery failed", {
-					sessionId: session.sessionId,
-					message: error instanceof Error ? error.message : "unknown",
-				});
-			}
-		}
-		if (attempt < ATTEMPTS) {
-			await new Promise((resolve) => setTimeout(resolve, delay));
-			delay *= 3;
-		}
-	}
-	return false;
 }
 
 export function report(session: Session, events: ReportEvent[]): Promise<boolean> {
@@ -92,35 +73,67 @@ export function report(session: Session, events: ReportEvent[]): Promise<boolean
 	void settled.then(() => {
 		if (chains.get(key(session)) === settled) chains.delete(key(session));
 	});
-	for (const event of events) {
-		if (event.kind === "user_message") userRows.set(key(session, event.turnId), delivered);
-	}
 	return delivered;
 }
 
-/** Called once a turn ends: nothing of that turn waits on its user row any more. */
-export function forgetTurn(session: Session & { turnId: string }): void {
-	userRows.delete(key(session, session.turnId));
+/** The app deduplicates on each event id, so a retry after a lost response writes nothing twice. */
+async function deliver(session: Session, events: ReportEvent[]): Promise<boolean> {
+	const deadline = Date.now() + DELIVERY_WINDOW_MS;
+	let delay = BASE_DELAY_MS;
+	for (let attempt = 1; ; attempt += 1) {
+		let failure: string;
+		try {
+			const response = await post(
+				session,
+				{ events },
+				Math.max(1, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now())),
+			);
+			if (response.ok) return true;
+			if (response.status < 500 && response.status !== 429) {
+				console.error("[reporting] the app refused a report", {
+					sessionId: session.sessionId,
+					status: response.status,
+				});
+				return false;
+			}
+			failure = `status ${response.status}`;
+		} catch (error) {
+			failure = error instanceof Error ? error.message : "unknown";
+		}
+		if (Date.now() + delay >= deadline) {
+			console.error("[reporting] delivery failed", {
+				sessionId: session.sessionId,
+				attempts: attempt,
+				eventIds: events.map((event) => event.eventId),
+				message: failure,
+			});
+			return false;
+		}
+		await new Promise((resolve) => setTimeout(resolve, delay));
+		delay = Math.min(delay * 2, MAX_DELAY_MS);
+	}
 }
 
-/** Customer tools report their own analytics and enrichment replays in insert order, so a tool waits for its turn's user row. */
-export async function userRowStored(session: Session & { turnId: string }): Promise<boolean> {
-	const local = userRows.get(key(session, session.turnId));
-	if (local) return await local.catch(() => false);
+/**
+ * The user row's place in the event order, taken before the turn starts, so the
+ * row sorts ahead of everything the turn's tools report however late it lands.
+ */
+export async function reserveUserRow(session: Session): Promise<number | undefined> {
 	try {
-		const response = await post(session, { barrier: { turnId: session.turnId } });
-		if (!response.ok) return false;
+		const response = await post(session, { reserve: true }, RESERVE_TIMEOUT_MS);
+		if (!response.ok) return undefined;
 		const body: unknown = await response.json();
-		return (
+		const id =
 			typeof body === "object" &&
 			body !== null &&
 			"data" in body &&
 			typeof body.data === "object" &&
 			body.data !== null &&
-			"stored" in body.data &&
-			body.data.stored === true
-		);
+			"id" in body.data
+				? body.data.id
+				: undefined;
+		return typeof id === "number" && Number.isSafeInteger(id) && id > 0 ? id : undefined;
 	} catch {
-		return false;
+		return undefined;
 	}
 }
