@@ -2,16 +2,18 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import type { SessionAuthContext } from "eve/context";
 
-type Step = { kind: "barrier" | "report" | "tool"; at: number; body?: unknown };
+type Step = { kind: "app" | "tool"; at: number; body?: unknown };
 
 let steps: Step[] = [];
+let toolCalls: Record<string, unknown>[] = [];
 
 mock.module("./mcp-catalog.js", () => ({
 	listMcpTools: () => {
 		throw new Error("not used here");
 	},
-	callMcpTool: async () => {
+	callMcpTool: async (input: Record<string, unknown>) => {
 		steps.push({ kind: "tool", at: Date.now() });
+		toolCalls.push(input);
 		return { content: [{ type: "text", text: "12 EUR" }] };
 	},
 	textOf: () => "",
@@ -34,8 +36,7 @@ const ENV_KEYS = [
 const saved = new Map<string, string | undefined>();
 
 let counter = 0;
-let barrierGate: Promise<Response> | undefined;
-let reportGate: Promise<Response> | undefined;
+let appGate: Promise<Response> | undefined;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -115,14 +116,6 @@ async function outcomeOf(promise: Promise<unknown>): Promise<{ ok: true; value: 
 	}
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-	let resolve: (value: T) => void = () => {};
-	const promise = new Promise<T>((settle) => {
-		resolve = settle;
-	});
-	return { promise, resolve };
-}
-
 beforeEach(() => {
 	for (const key of ENV_KEYS) saved.set(key, process.env[key]);
 	process.env.WANIWANI_API_URL = "http://app.test";
@@ -131,17 +124,13 @@ beforeEach(() => {
 	process.env.WANIWANI_APP_PUBLIC_KEY = "tools-test-app-key";
 	delete process.env.WANIWANI_API_KEY;
 	steps = [];
-	barrierGate = undefined;
-	reportGate = undefined;
+	toolCalls = [];
+	appGate = undefined;
 	globalThis.fetch = Object.assign(
 		async (_input: string | URL | Request, init?: RequestInit) => {
 			const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : {};
-			if (isRecord(body) && body.barrier !== undefined) {
-				steps.push({ kind: "barrier", at: Date.now(), body });
-				return await (barrierGate ?? Response.json({ data: { stored: true } }));
-			}
-			steps.push({ kind: "report", at: Date.now(), body });
-			return await (reportGate ?? Response.json({ ok: true }));
+			steps.push({ kind: "app", at: Date.now(), body });
+			return await (appGate ?? Response.json({ ok: true }));
 		},
 		{ preconnect: originalFetch.preconnect },
 	);
@@ -171,41 +160,36 @@ describe("MCP tools for a turn", () => {
 		releaseSnapshot(ctx.session.id);
 	});
 
-	test("a native session's tool waits for the app to confirm the turn's user row", async () => {
-		const gate = deferred<Response>();
-		barrierGate = gate.promise;
+	test("a native session's tool runs without asking the app about its turn's user row", async () => {
+		appGate = new Promise<Response>(() => {});
 		const ctx = ctxWith({ initiator: NATIVE });
 		const tools = await resolveTools(ctx, "turn_b1");
-		const running = runTool(tools, "get_price");
-		await new Promise((resolve) => setTimeout(resolve, 100));
-		expect(steps.map((step) => step.kind)).toEqual(["barrier"]);
-		const barrier = steps[0]?.body;
-		expect(isRecord(barrier) && barrier.sessionId).toBe(ctx.session.id);
-		expect(isRecord(barrier) && barrier.barrier).toEqual({ turnId: "turn_b1" });
-		gate.resolve(Response.json({ data: { stored: true } }));
-		await running;
-		expect(steps.map((step) => step.kind)).toEqual(["barrier", "tool"]);
+		await runTool(tools, "get_price");
+		expect(steps.map((step) => step.kind)).toEqual(["tool"]);
 		releaseSnapshot(ctx.session.id);
 	});
 
-	test("a native session's tool waits for this process's own user-row delivery", async () => {
-		const gate = deferred<Response>();
-		reportGate = gate.promise;
+	test("a native session's tool does not wait for this process's own user-row delivery", async () => {
+		appGate = new Promise<Response>(() => {});
 		const ctx = ctxWith({ initiator: NATIVE });
 		void report({ environmentId: "env_tools", sessionId: ctx.session.id }, [
 			{ kind: "user_message", eventId: "eve_u", occurredAt: "2026-09-29T10:00:00.000Z", turnId: "turn_b2", text: "hi" },
 		]);
 		const tools = await resolveTools(ctx, "turn_b2");
-		const running = runTool(tools, "get_price");
-		await new Promise((resolve) => setTimeout(resolve, 100));
-		expect(steps.map((step) => step.kind)).toEqual(["report"]);
-		gate.resolve(Response.json({ ok: true }));
-		await running;
-		expect(steps.map((step) => step.kind)).toEqual(["report", "tool"]);
+		await runTool(tools, "get_price");
+		expect(steps.map((step) => step.kind)).toEqual(["app", "tool"]);
 		releaseSnapshot(ctx.session.id);
 	});
 
-	test("a session a server token started runs its tool with no barrier", async () => {
+	test("a native session's tool with a reserved user row asks the app nothing", async () => {
+		const ctx = ctxWith({ initiator: NATIVE, current: { ...NATIVE, userEventId: "12" } });
+		const tools = await resolveTools(ctx, "turn_b3");
+		await runTool(tools, "get_price");
+		expect(steps.map((step) => step.kind)).toEqual(["tool"]);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("a session a server token started runs its tool without asking the app", async () => {
 		const ctx = ctxWith({ initiator: SERVER });
 		const tools = await resolveTools(ctx, "turn_s");
 		await runTool(tools, "get_price");
@@ -229,7 +213,7 @@ describe("MCP tools for a turn", () => {
 		releaseSnapshot(ctx.session.id);
 	});
 
-	test("a steered block also stops a tool whose barrier would have passed", async () => {
+	test("a steered block also stops a native session's tool", async () => {
 		const ctx = ctxWith({ initiator: NATIVE });
 		const tools = await resolveTools(ctx, "turn_steer_b");
 		const outcome = await outcomeOf(
@@ -287,6 +271,68 @@ describe("MCP tools for a turn", () => {
 		);
 		expect(outcome.ok).toBe(true);
 		expect(steps.filter((step) => step.kind === "tool")).toHaveLength(1);
+		releaseSnapshot(ctx.session.id);
+	});
+});
+
+const DOCUMENTS = [
+	{ documentId: "0b6f3c1e-2a4d-4e8b-9c1f-3d5e7a9b1c2d", filename: "quote.pdf", mediaType: "application/pdf" },
+	{ documentId: "1c7a4d2f-3b5e-4f9c-8d2a-4e6f8b0c2d3e", filename: "car.png", mediaType: "image/png" },
+];
+
+function metaOfLastCall(): Record<string, unknown> {
+	const meta = toolCalls.at(-1)?.meta;
+	return isRecord(meta) ? meta : {};
+}
+
+describe("MCP _meta for a browser turn", () => {
+	test("the browser's documents reach waniwani/documents", async () => {
+		const ctx = ctxWith({ initiator: NATIVE, current: { ...NATIVE, documents: JSON.stringify(DOCUMENTS) } });
+		const tools = await resolveTools(ctx, "turn_docs");
+		await runTool(tools, "get_price");
+		expect(metaOfLastCall()["waniwani/documents"]).toEqual(DOCUMENTS);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("the browser's extra reaches waniwani/extra", async () => {
+		const extra = { plan: "gold", utm: { source: "ads" } };
+		const ctx = ctxWith({ initiator: NATIVE, current: { ...NATIVE, extra: JSON.stringify(extra) } });
+		const tools = await resolveTools(ctx, "turn_extra");
+		await runTool(tools, "get_price");
+		expect(metaOfLastCall()["waniwani/extra"]).toEqual(extra);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("both reach _meta together, with the runtime's own keys intact", async () => {
+		const extra = { plan: "gold" };
+		const ctx = ctxWith({
+			initiator: NATIVE,
+			current: { ...NATIVE, documents: JSON.stringify(DOCUMENTS), extra: JSON.stringify(extra) },
+		});
+		const tools = await resolveTools(ctx, "turn_both");
+		await runTool(tools, "get_price");
+		const meta = metaOfLastCall();
+		expect(meta["waniwani/documents"]).toEqual(DOCUMENTS);
+		expect(meta["waniwani/extra"]).toEqual(extra);
+		expect(meta["waniwani/sessionId"]).toBe(ctx.session.id);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("a turn with neither carries no documents or extra key", async () => {
+		const ctx = ctxWith({ initiator: NATIVE });
+		const tools = await resolveTools(ctx, "turn_none");
+		await runTool(tools, "get_price");
+		const meta = metaOfLastCall();
+		expect("waniwani/documents" in meta).toBe(false);
+		expect("waniwani/extra" in meta).toBe(false);
+		releaseSnapshot(ctx.session.id);
+	});
+
+	test("the first message's documents do not ride along on a later turn", async () => {
+		const ctx = ctxWith({ initiator: { ...NATIVE, documents: JSON.stringify(DOCUMENTS) }, current: NATIVE });
+		const tools = await resolveTools(ctx, "turn_later");
+		await runTool(tools, "get_price");
+		expect("waniwani/documents" in metaOfLastCall()).toBe(false);
 		releaseSnapshot(ctx.session.id);
 	});
 });

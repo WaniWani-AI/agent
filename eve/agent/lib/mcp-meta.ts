@@ -11,6 +11,16 @@ const DERIVED_KEYS = new Set([
 	"waniwani/source",
 ]);
 
+function jsonArray(raw: unknown): unknown[] | undefined {
+	if (typeof raw !== "string") return undefined;
+	try {
+		const value: unknown = JSON.parse(raw);
+		return Array.isArray(value) && value.length > 0 ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function jsonObject(raw: unknown): Record<string, unknown> | undefined {
 	if (typeof raw !== "string") return undefined;
 	try {
@@ -25,8 +35,9 @@ function jsonObject(raw: unknown): Record<string, unknown> | undefined {
 
 /**
  * The same keys the app's `buildMcpMeta` produces, so an MCP server reads one
- * shape. The context header carries what only the app knows (documents, channel
- * metadata, user agent, geolocation); identity and turn count stay the runtime's.
+ * shape. The context header carries what only the app knows (a forwarded turn's
+ * documents, channel metadata, user agent, geolocation). A browser's documents
+ * arrive validated with its message. Identity and turn count stay the runtime's.
  */
 export function mcpMeta(input: {
 	sessionId: string;
@@ -35,8 +46,10 @@ export function mcpMeta(input: {
 	channel: ChannelSource | undefined;
 	extraHeader: unknown;
 	contextHeader: unknown;
+	documentsHeader?: unknown;
 }): McpMeta {
 	const extra = jsonObject(input.extraHeader);
+	const documents = jsonArray(input.documentsHeader);
 	const context = Object.fromEntries(
 		Object.entries(jsonObject(input.contextHeader) ?? {}).filter(
 			([key]) => !DERIVED_KEYS.has(key),
@@ -47,6 +60,7 @@ export function mcpMeta(input: {
 	return {
 		...(extra ? { "waniwani/extra": extra } : {}),
 		...context,
+		...(documents ? { "waniwani/documents": documents } : {}),
 		"waniwani/sessionId": input.sessionId,
 		...(visitorId && visitorId !== ANONYMOUS
 			? { "waniwani/visitorId": visitorId }

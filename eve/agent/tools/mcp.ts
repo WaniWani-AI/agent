@@ -7,9 +7,7 @@ import { withViewBinding } from "../lib/view-binding.js";
 import { resolveChannel, tenantOf } from "../lib/tenant.js";
 import { snapshotFor } from "../lib/turn-snapshot.js";
 import type { SessionChannel } from "../lib/session-config.js";
-import { isNativeSession } from "../lib/browser-token.js";
 import { GUARDRAIL_BLOCKED } from "../lib/guardrail.js";
-import { userRowStored } from "../lib/reporting.js";
 import type { DynamicResolveContext } from "eve/tools";
 
 function declaresSessionId(schema: JsonObject): boolean {
@@ -44,11 +42,6 @@ function withoutSessionId(schema: JsonObject): JsonObject {
 	};
 }
 
-function turnIdOf(event: unknown): string | undefined {
-	const turnId = (event as { data?: { turnId?: unknown } })?.data?.turnId;
-	return typeof turnId === "string" ? turnId : undefined;
-}
-
 function turnCountOf(event: unknown): number {
 	const sequence = (event as { data?: { sequence?: unknown } })?.data?.sequence;
 	return typeof sequence === "number" ? sequence + 1 : 1;
@@ -67,6 +60,7 @@ function buildMeta(input: {
 		channel: resolveChannel({ auth, channels: input.channels }),
 		extraHeader: auth.current?.attributes.extra,
 		contextHeader: auth.current?.attributes.context,
+		documentsHeader: auth.current?.attributes.documents,
 	});
 }
 
@@ -89,11 +83,6 @@ export default defineDynamic({
 				channels: config.channels,
 				turnCount: turnCountOf(event),
 			});
-			const turnId = turnIdOf(event);
-			const barrier =
-				isNativeSession(ctx.session.auth) && tenant.environmentId && turnId
-					? { environmentId: tenant.environmentId, sessionId, turnId }
-					: undefined;
 
 			return Object.fromEntries(
 				tools.map((tool) => {
@@ -107,12 +96,6 @@ export default defineDynamic({
 								// A flagged message steered into a running turn keeps the tools this turn resolved.
 								if (toolCtx.session?.auth?.current?.attributes.guardrail === GUARDRAIL_BLOCKED) {
 									throw new Error("The visitor's message was blocked by the content safety filter");
-								}
-								if (barrier && !(await userRowStored(barrier))) {
-									console.error("[reporting] a tool ran before its turn's user row was stored", {
-										sessionId,
-										turnId: barrier.turnId,
-									});
 								}
 								return withViewBinding(
 									await callMcpTool({

@@ -4,6 +4,7 @@ import { defineAgent, defineDynamic } from "eve";
 import { firstTokenTimeout, firstTokenTimeoutFromEnv } from "./lib/first-token-timeout.js";
 import { resolveModelAccess } from "./lib/model.js";
 import { snapshotFor } from "./lib/turn-snapshot.js";
+import { webSearchScope } from "./lib/web-search.js";
 
 const contextWindowTokens = Number(
 	process.env.WANIWANI_MODEL_CONTEXT_WINDOW_TOKENS || 32_000,
@@ -34,7 +35,14 @@ export default defineAgent({
 				return {
 					// A wrapped Gateway model keeps provider `gateway` and its slug, so eve still
 					// reads its context window from the Gateway catalog.
-					model: wrapLanguageModel({ model, middleware: firstToken }),
+					model: wrapLanguageModel({
+						model,
+						// Search goes through the Gateway, so an own-model endpoint never gets it.
+						middleware: [
+							firstToken,
+							webSearchScope(access.kind === "gateway" ? config.webSearch : null),
+						],
+					}),
 					...(windowTokens ? { modelContextWindowTokens: windowTokens } : {}),
 					...(access.providerOptions
 						? { modelOptions: { providerOptions: access.providerOptions } }
