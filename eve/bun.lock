@@ -8,9 +8,9 @@
         "@ai-sdk/openai": "4.0.75",
         "@modelcontextprotocol/sdk": "1.30.0",
         "@waniwani/sdk": "^0.19.8",
-        "@workflow/world-postgres": "5.0.0-beta.47",
+        "@workflow/world-postgres": "5.0.1",
         "ai": "7.0.114",
-        "eve": "0.68.0",
+        "eve": "0.71.0",
         "just-bash": "3.4.2",
       },
       "devDependencies": {
@@ -133,17 +133,17 @@
 
     "@waniwani/sdk": ["@waniwani/sdk@0.19.9", "", { "peerDependencies": { "@ai-sdk/mcp": ">=1.0.0", "@ai-sdk/react": ">=1.0.0", "@modelcontextprotocol/ext-apps": "^1.7.4", "@modelcontextprotocol/sdk": "^1.29.0", "ai": ">=6.0.141", "react": ">=18.0.0", "skybridge": ">=0.35.0", "zod": ">=4.0.0" }, "optionalPeers": ["@ai-sdk/mcp", "@ai-sdk/react", "@modelcontextprotocol/ext-apps", "react", "skybridge"] }, "sha512-G8UFdZv2+KHLqb517FPdcklnOCAmyxq8Tpmd07mbgBDclFPJvL+Uzx66kl/76+gC/svDy4FL/rDvn94YH5Qu5Q=="],
 
-    "@workflow/errors": ["@workflow/errors@5.0.0-beta.24", "", { "dependencies": { "@workflow/utils": "5.0.0-beta.10", "@workflow/world": "5.0.0-beta.39", "ms": "2.1.3" } }, "sha512-9g2pY/bnVcLCMeBZ+D7wzh/4gZPjTVPh9Y2fr3S5X+qvmGpS4Pg2Moi6Qjrv8Lf6q2RgG9qmaENFMhOdSjDmmQ=="],
+    "@workflow/errors": ["@workflow/errors@5.0.1", "", { "dependencies": { "@workflow/utils": "5.0.0", "@workflow/world": "5.0.1", "ms": "2.1.3" } }, "sha512-6cLOImavSHEHqXKPYgL99ZKn0e3Cw1tjxXwgb+CP+DAWi2ikkzUBcK3xinkwzzaxUoylkZcsNv8hEu61xpJvhQ=="],
 
     "@workflow/serde": ["@workflow/serde@4.1.0", "", {}, "sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ=="],
 
-    "@workflow/utils": ["@workflow/utils@5.0.0-beta.10", "", { "dependencies": { "ms": "2.1.3" } }, "sha512-LVypRMbZG3z1GHSSyChhR/7WaDFjjlIpeGcysX5eI3/1sOVv8NHNOfCxXConvqGj9fSkM1oBlieS/eLO5kDaow=="],
+    "@workflow/utils": ["@workflow/utils@5.0.0", "", { "dependencies": { "ms": "2.1.3" } }, "sha512-WEVTOy9mC43ZvWutFSGrtHxnIe1Nyhxqkbm3jY3ugUlp950lnQ6L6Ekp0S2y3jFd8d5ZOqRhOdpceJ69z3y3ag=="],
 
-    "@workflow/world": ["@workflow/world@5.0.0-beta.39", "", { "dependencies": { "ulid": "~3.0.1", "zod": "~4.5.4" } }, "sha512-pOL6+GXZKjO49UhCZrjfooeCDQAPdTWezQPJtH+jJQxrVXHjuSgPBfftuv8VxKbO9JLRnjUw0o3AFSNNAo4Ygw=="],
+    "@workflow/world": ["@workflow/world@5.0.1", "", { "dependencies": { "ulid": "~3.0.1", "zod": "~4.5.4" } }, "sha512-rO95deJNAId4DBS6/RylBthTYeKUR0SGUOJ7fg5ZCz4jMngI6xAbLTueXXFOS3dp8bDh+aYWgwSIKwuEKfjagQ=="],
 
-    "@workflow/world-local": ["@workflow/world-local@5.0.0-beta.48", "", { "dependencies": { "@vercel/queue": "0.5.1", "@workflow/errors": "5.0.0-beta.24", "@workflow/utils": "5.0.0-beta.10", "@workflow/world": "5.0.0-beta.39", "async-sema": "3.1.1", "proper-lockfile": "4.1.2", "ulid": "~3.0.1", "undici": "7.29.0", "zod": "~4.5.4" }, "peerDependencies": { "@opentelemetry/api": "1" }, "optionalPeers": ["@opentelemetry/api"] }, "sha512-u0wKwHF/D0z0JtmVMHxFLKWNnaDt9oZhtMUemVGQ1dPONqeroGFQRAnu5GYyoJi8ZEg7H9WDE7Yj1gh6bfBBXA=="],
+    "@workflow/world-local": ["@workflow/world-local@5.0.1", "", { "dependencies": { "@vercel/queue": "0.5.1", "@workflow/errors": "5.0.1", "@workflow/utils": "5.0.0", "@workflow/world": "5.0.1", "async-sema": "3.1.1", "proper-lockfile": "4.1.2", "ulid": "~3.0.1", "undici": "7.30.0", "zod": "~4.5.4" }, "peerDependencies": { "@opentelemetry/api": "1" }, "optionalPeers": ["@opentelemetry/api"] }, "sha512-P/NGhwlRlJqGa8TBncD1fzw/bEPv6aWXMpTWcLUZ1A6MmvemnOQ2dGDopxdx8TYfKtS0hrQn1MMIA7jaaHdbNg=="],
 
-    "@workflow/world-postgres": ["@workflow/world-postgres@5.0.0-beta.47", "", { "dependencies": { "@vercel/queue": "0.5.1", "@workflow/errors": "5.0.0-beta.24", "@workflow/utils": "5.0.0-beta.10", "@workflow/world": "5.0.0-beta.39", "@workflow/world-local": "5.0.0-beta.48", "cbor-x": "1.6.0", "dotenv": "17.3.1", "drizzle-orm": "0.45.2", "graphile-worker": "0.16.6", "pg": "8.20.0", "ulid": "~3.0.1", "zod": "~4.5.4" }, "bin": { "bootstrap": "bin/setup.js", "workflow-postgres-setup": "bin/setup-deprecated.js" } }, "sha512-TKxqNYtKFuOFH0OaewIvXojfWZ132JHvCm7QKI8zHXXucRZVOLetvOfb37JZjmgVRxQENitFdOvKwxmWsYS9+A=="],
+    "@workflow/world-postgres": ["@workflow/world-postgres@5.0.1", "", { "dependencies": { "@vercel/queue": "0.5.1", "@workflow/errors": "5.0.1", "@workflow/utils": "5.0.0", "@workflow/world": "5.0.1", "@workflow/world-local": "5.0.1", "cbor-x": "1.6.0", "dotenv": "17.3.1", "drizzle-orm": "0.45.2", "graphile-worker": "0.16.6", "pg": "8.20.0", "ulid": "~3.0.1", "zod": "~4.5.4" }, "bin": { "bootstrap": "./bin/setup.js", "workflow-postgres-setup": "./bin/setup-deprecated.js" } }, "sha512-U8Sw/QbtSzxFSWWCBsgZwuaBp6X/tcjkImvx7PsxzR7KS5NNsw/gAbAqcmoqR+LDLwi4lkiFrrkVnrn7ufHMSQ=="],
 
     "accepts": ["accepts@2.0.0", "", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng=="],
 
@@ -263,7 +263,7 @@
 
     "etag": ["etag@1.8.1", "", {}, "sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg=="],
 
-    "eve": ["eve@0.68.0", "", { "dependencies": { "nitro": "3.0.260903-beta", "undici": "8.9.0" }, "peerDependencies": { "@opentelemetry/api": "^1.0.0", "ai": "^7.0.105", "braintrust": "^3.0.0", "chat": "^4.41.0", "dd-trace": "^6.13.0", "just-bash": "^3.1.0", "microsandbox": "^0.5.0" }, "optionalPeers": ["@opentelemetry/api", "braintrust", "chat", "dd-trace", "microsandbox"], "bin": "bin/eve.js" }, "sha512-1cvxOdbfESdhZjAdhjUwFJSx0B6uWkbaEvwmau6vNhHNX9A+SZaathd79acDzQNYbOa+5WjsypOx4wa8KjKtgQ=="],
+    "eve": ["eve@0.71.0", "", { "dependencies": { "nitro": "3.0.260903-beta", "undici": "8.10.2" }, "peerDependencies": { "@opentelemetry/api": "^1.0.0", "ai": "^7.0.105", "braintrust": "^3.0.0", "chat": "^4.41.0", "dd-trace": "^6.13.0", "just-bash": "^3.1.0", "microsandbox": "^0.5.0" }, "optionalPeers": ["@opentelemetry/api", "braintrust", "chat", "dd-trace", "just-bash", "microsandbox"], "bin": { "eve": "./bin/eve.js" } }, "sha512-BQn1TBB8booio8tAnKRqxLEJPorHqWwD8DMXFUV4Cbk2TF9XCqqlFpasjxURHoW58G/rq5S6sx2LafpfAmAGVQ=="],
 
     "eventsource": ["eventsource@3.0.7", "", { "dependencies": { "eventsource-parser": "^3.0.1" } }, "sha512-CRT1WTyuQoD771GW56XEZFQ/ZoSfWid1alKGDYMmkt2yl8UXrVR4pspqWNEcqKvVIzg6PAltWjxcSSPrboA4iA=="],
 
@@ -611,7 +611,7 @@
 
     "ulid": ["ulid@3.0.2", "", { "bin": "dist/cli.js" }, "sha512-yu26mwteFYzBAot7KVMqFGCVpsF6g8wXfJzQUHvu1no3+rRRSFcSV2nKeYvNPLD2J4b08jYBDhHUjeH0ygIl9w=="],
 
-    "undici": ["undici@8.9.0", "", {}, "sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA=="],
+    "undici": ["undici@8.10.2", "", {}, "sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ=="],
 
     "undici-types": ["undici-types@7.16.0", "", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
 
@@ -661,7 +661,7 @@
 
     "@workflow/world/zod": ["zod@4.5.4", "", {}, "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA=="],
 
-    "@workflow/world-local/undici": ["undici@7.29.0", "", {}, "sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw=="],
+    "@workflow/world-local/undici": ["undici@7.30.0", "", {}, "sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ=="],
 
     "@workflow/world-local/zod": ["zod@4.5.4", "", {}, "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA=="],
 

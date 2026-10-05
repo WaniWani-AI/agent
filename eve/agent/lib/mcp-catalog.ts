@@ -4,6 +4,7 @@ import type { JsonObject } from "./json.js";
 import { mcpEndpointFor } from "./mcp-endpoint.js";
 import { credentialForm } from "./tenant.js";
 import { textOf } from "./tool-output.js";
+import { timing } from "./turn-timing.js";
 
 export type McpTool = {
 	name: string;
@@ -110,9 +111,12 @@ export async function callMcpTool(input: {
 	arguments: Record<string, unknown>;
 	meta: McpMeta;
 	abortSignal: AbortSignal;
+	sessionId?: string;
 }): Promise<unknown> {
 	const endpoint = mcpEndpointFor(input.mcpUrl);
+	const startedAt = Date.now();
 	const client = await clientFor(input.tenantKey, endpoint);
+	const connectedAt = Date.now();
 	const signal = AbortSignal.any([
 		input.abortSignal,
 		AbortSignal.timeout(60_000),
@@ -128,6 +132,14 @@ export async function callMcpTool(input: {
 			// call must not close it out from under the others.
 			if (!signal.aborted) forget(input.tenantKey, endpoint);
 			throw error;
+		})
+		.finally(() => {
+			timing("tool.called", {
+				sessionId: input.sessionId,
+				tool: input.name,
+				connectMs: connectedAt - startedAt,
+				callMs: Date.now() - connectedAt,
+			});
 		});
 
 	if (result.isError) {

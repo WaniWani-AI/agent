@@ -53,7 +53,10 @@ export default defineAgent({
 			},
 		},
 	}),
-	...(process.env.VERCEL
-		? {}
-		: { experimental: { workflow: { world: "@workflow/world-postgres" } } }),
+	experimental: {
+		workflow: {
+			modelCallsPerStep: 3,
+			...(process.env.VERCEL ? {} : { world: "@workflow/world-postgres" }),
+		},
+	},
 });
