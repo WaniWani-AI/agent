@@ -1,8 +1,9 @@
 import { defineHook } from "eve/hooks";
 import { resolveModelAccess } from "../lib/model.js";
-import { publishedNow } from "../lib/published.js";
+import { cacheState, publishedNow } from "../lib/published.js";
 import { assertCallerOwnsSession, tenantOf } from "../lib/tenant.js";
 import { holdSnapshot, releaseSnapshot } from "../lib/turn-snapshot.js";
+import { timing } from "../lib/turn-timing.js";
 
 /**
  * The gate: eve runs hooks before every resolver, so everything downstream reads
@@ -14,7 +15,11 @@ export default defineHook({
 	events: {
 		async "turn.started"(_event, ctx) {
 			assertCallerOwnsSession(ctx.session.auth);
-			const published = await publishedNow(tenantOf(ctx.session.auth));
+			const tenant = tenantOf(ctx.session.auth);
+			const cache = cacheState(tenant);
+			const startedAt = Date.now();
+			const published = await publishedNow(tenant);
+			timing("gate.published", { sessionId: ctx.session.id, cache, ms: Date.now() - startedAt });
 			resolveModelAccess(published.config.model);
 			holdSnapshot(ctx.session.id, published);
 		},

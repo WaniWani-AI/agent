@@ -5,6 +5,8 @@ import {
 	type SessionConfig,
 } from "./session-config.js";
 import type { Tenant } from "./tenant.js";
+import { timing } from "./turn-timing.js";
+import { waitUntil } from "./wait-until.js";
 
 export type Published = { config: SessionConfig; tools: McpTool[] };
 
@@ -48,6 +50,7 @@ async function refresh(tenant: Tenant): Promise<Published> {
 	entries.set(tenant.key, attempt);
 
 	try {
+		const startedAt = Date.now();
 		const fetched = await fetchSessionConfig({
 			tenant,
 			previous:
@@ -55,9 +58,16 @@ async function refresh(tenant: Tenant): Promise<Published> {
 					? { etag: previous.etag, value: previous.published.config }
 					: undefined,
 		});
+		const configMs = Date.now() - startedAt;
 		const tools = await listMcpTools({
 			tenantKey: tenant.key,
 			mcpUrl: fetched.value.mcpUrl,
+		});
+		timing("published.refresh", {
+			tenant: tenant.key,
+			configMs,
+			toolsMs: Date.now() - startedAt - configMs,
+			notModified: fetched.value === previous?.published?.config,
 		});
 		const published: Published = { config: fetched.value, tools };
 		entries.set(tenant.key, {
@@ -105,16 +115,24 @@ export async function publishedNow(tenant: Tenant): Promise<Published> {
 	return await shared(tenant);
 }
 
+export function cacheState(tenant: Tenant): "warm" | "stale" | "cold" {
+	const entry = entries.get(tenant.key);
+	if (!servable(entry)) return "cold";
+	return fresh(entry) ? "warm" : "stale";
+}
+
 export function revalidatePublished(tenant: Tenant): void {
 	if (fresh(entries.get(tenant.key)) || inflight.has(tenant.key)) {
 		return;
 	}
-	void shared(tenant).catch((error: unknown) => {
-		console.error("[published] revalidation failed", {
-			tenant: tenant.key,
-			message: messageOf(error),
-		});
-	});
+	waitUntil(
+		shared(tenant).catch((error: unknown) => {
+			console.error("[published] revalidation failed", {
+				tenant: tenant.key,
+				message: messageOf(error),
+			});
+		}),
+	);
 }
 
 export function resetPublished(): void {

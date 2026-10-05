@@ -1,6 +1,7 @@
 import type { SessionAuth } from "eve/context";
-import { type Published, publishedNow } from "./published.js";
+import { cacheState, type Published, publishedNow } from "./published.js";
 import { assertCallerOwnsSession, tenantOf } from "./tenant.js";
+import { timing } from "./turn-timing.js";
 
 const snapshots = new Map<string, Published>();
 
@@ -31,7 +32,11 @@ export async function snapshotFor(input: {
 		return held;
 	}
 	assertCallerOwnsSession(input.auth);
-	const rebuilt = await publishedNow(tenantOf(input.auth));
+	const tenant = tenantOf(input.auth);
+	const cache = cacheState(tenant);
+	const startedAt = Date.now();
+	const rebuilt = await publishedNow(tenant);
+	timing("snapshot.rebuilt", { sessionId: input.sessionId, cache, ms: Date.now() - startedAt });
 	holdSnapshot(input.sessionId, rebuilt);
 	return rebuilt;
 }
