@@ -14,9 +14,10 @@ import {
 	attachedDocumentsOf,
 	parseAttachedDocuments,
 } from "../lib/attached-documents.js";
-import { publishedNow } from "../lib/published.js";
+import { cacheState, publishedNow } from "../lib/published.js";
 import { reserveUserRow } from "../lib/reporting.js";
 import { ANONYMOUS, appPublicKey, credentialForm, tenantOf } from "../lib/tenant.js";
+import { timing } from "../lib/turn-timing.js";
 
 type Attributes = Readonly<Record<string, string | readonly string[]>>;
 
@@ -79,22 +80,37 @@ function withGrant(auth: SessionAuthContext, token: string | null): SessionAuthC
 }
 
 async function screened(caller: SessionAuthContext, text: string): Promise<boolean> {
-	const instructions = await publishedNow(tenantOf({ current: caller, initiator: caller }))
+	const tenant = tenantOf({ current: caller, initiator: caller });
+	const cache = cacheState(tenant);
+	const startedAt = Date.now();
+	const instructions = await publishedNow(tenant)
 		.then((published) => published.config.instructions)
 		.catch(() => undefined);
-	return await lakeraFlags({ text, instructions });
+	const instructionsMs = Date.now() - startedAt;
+	const flagged = await lakeraFlags({ text, instructions });
+	timing("channel.screened", {
+		sessionId: caller.attributes.sid,
+		cache,
+		instructionsMs,
+		lakeraMs: Date.now() - startedAt - instructionsMs,
+	});
+	return flagged;
 }
 
 /** Runs on the way to the model, so the reservation rides alongside the Lakera check. */
 async function guarded(caller: SessionAuthContext, text: string) {
 	if (caller.attributes.purpose !== "browser") return { auth: caller };
 	const { environmentId, sid } = caller.attributes;
+	const startedAt = Date.now();
 	const [flagged, userEventId] = await Promise.all([
 		screened(caller, text),
 		typeof environmentId === "string" && typeof sid === "string"
-			? reserveUserRow({ environmentId, sessionId: sid })
+			? reserveUserRow({ environmentId, sessionId: sid }).finally(() =>
+					timing("channel.reserved", { sessionId: sid, ms: Date.now() - startedAt }),
+				)
 			: undefined,
 	]);
+	timing("channel.guarded", { sessionId: sid, ms: Date.now() - startedAt });
 	const attributes = {
 		...caller.attributes,
 		...(userEventId !== undefined ? { userEventId: String(userEventId) } : {}),
