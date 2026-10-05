@@ -52,7 +52,7 @@ export default defineHook({
 	events: {
 		"message.received": (event, ctx) => {
 			const session = sessionOf(ctx);
-			if (!session || event.data.kind === "execution.background_task") return;
+			if (!session) return;
 			const { turnId } = event.data;
 			const id = reservedId(ctx);
 			waitUntil(report(session, [

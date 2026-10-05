@@ -12,9 +12,9 @@
     "@ai-sdk/openai": "4.0.75",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@waniwani/sdk": "^0.19.8",
-    "@workflow/world-postgres": "5.0.0-beta.47",
+    "@workflow/world-postgres": "5.0.1",
     "ai": "7.0.114",
-    "eve": "0.68.0",
+    "eve": "0.71.0",
     "just-bash": "3.4.2"
   },
   "devDependencies": {
