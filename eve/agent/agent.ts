@@ -4,6 +4,7 @@ import { defineAgent, defineDynamic } from "eve";
 import { firstTokenTimeout, firstTokenTimeoutFromEnv } from "./lib/first-token-timeout.js";
 import { resolveModelAccess } from "./lib/model.js";
 import { snapshotFor } from "./lib/turn-snapshot.js";
+import { modelTiming } from "./lib/turn-timing.js";
 import { webSearchScope } from "./lib/web-search.js";
 
 const contextWindowTokens = Number(
@@ -40,6 +41,7 @@ export default defineAgent({
 						// Search goes through the Gateway, so an own-model endpoint never gets it.
 						middleware: [
 							firstToken,
+							modelTiming(ctx.session.id),
 							webSearchScope(access.kind === "gateway" ? config.webSearch : null),
 						],
 					}),
