@@ -105,6 +105,7 @@ export default defineDynamic({
 										arguments: wantsSessionId ? { ...input, sessionId } : input,
 										meta,
 										abortSignal: toolCtx.abortSignal,
+										sessionId,
 									}),
 									tool.meta,
 								);
