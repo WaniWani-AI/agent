@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
+import type { Tenant } from "./tenant.js";
 import {
 	afterEach,
 	beforeEach,
@@ -28,6 +29,7 @@ type Recorded = {
 	ifNoneMatch: string | null;
 	authorization: string | null;
 	grant: string | null;
+	configSource: string | null;
 };
 type Replier = (request: Recorded) => Response;
 
@@ -43,11 +45,15 @@ mock.module("./mcp-catalog.js", () => ({
 	textOf: () => "",
 }));
 
-const { publishedNow, revalidatePublished, resetPublished } = await import(
-	"./published.js"
-);
-const { tenantOf, assertCallerOwnsSession, credentialForm, resolveChannel } =
-	await import("./tenant.js");
+const { publishedNow, revalidatePublished, resetPublished, cacheState } =
+	await import("./published.js");
+const {
+	tenantOf,
+	assertCallerOwnsSession,
+	credentialForm,
+	resolveChannel,
+	configRequest,
+} = await import("./tenant.js");
 
 const ALPHA = { key: "alpha", environmentId: "alpha" };
 const BRAVO = { key: "bravo", environmentId: "bravo" };
@@ -111,6 +117,7 @@ describe("published", () => {
 				ifNoneMatch: headers.get("if-none-match"),
 				authorization: headers.get("authorization"),
 				grant: headers.get("x-waniwani-grant"),
+				configSource: headers.get("x-waniwani-config-source"),
 			};
 			calls.push(recorded);
 			if (!url.includes(CONFIG_PATH)) {
@@ -394,6 +401,287 @@ describe("published", () => {
 
 		await expect(publishedNow(ALPHA)).rejects.toThrow(/incomplete/);
 	});
+
+	describe("a draft tenant", () => {
+		const DRAFT: Tenant = { key: "alpha", environmentId: "alpha", draft: true };
+
+		function byConfigSource(input: { live: string; draft: string }): Replier {
+			return (request) =>
+				request.configSource === "draft"
+					? ok(input.draft, '"d"')
+					: ok(input.live, '"l"');
+		}
+
+		test("a draft read names the draft source next to its grant and service token", async () => {
+			await publishedNow({ ...DRAFT, grant: "app.signed.token" });
+
+			const call = configCalls()[0];
+			expect(call?.url).toContain("environmentId=alpha");
+			expect(call?.authorization?.startsWith("Bearer eyJ")).toBe(true);
+			expect(call?.grant).toBe("app.signed.token");
+			expect(call?.configSource).toBe("draft");
+			expect(call?.ifNoneMatch).toBeNull();
+		});
+
+		test("a live read names no config source", async () => {
+			await publishedNow({ ...ALPHA, grant: "app.signed.token" });
+
+			expect(configCalls()[0]?.configSource).toBeNull();
+		});
+
+		test("a cold draft read returns the fetched config and its listed tools", async () => {
+			reply = () => ok("draft prompt", '"d1"');
+			listTools = async () => [
+				{ name: "draft-tool", inputSchema: { type: "object" as const } },
+			];
+
+			const published = await publishedNow(DRAFT);
+
+			expect(published.config.instructions).toBe("draft prompt");
+			expect(published.tools.map((tool) => tool.name)).toEqual(["draft-tool"]);
+		});
+
+		test("every draft read fetches again inside the window, with no tag", async () => {
+			reply = () => ok("draft one", '"d1"');
+			listTools = async () => [
+				{ name: "tool-one", inputSchema: { type: "object" as const } },
+			];
+			const first = await publishedNow(DRAFT);
+
+			reply = () => ok("draft two", '"d2"');
+			listTools = async () => [
+				{ name: "tool-two", inputSchema: { type: "object" as const } },
+			];
+			const second = await publishedNow(DRAFT);
+
+			reply = () => ok("draft three", '"d3"');
+			const third = await publishedNow(DRAFT);
+
+			expect(first.config.instructions).toBe("draft one");
+			expect(second.config.instructions).toBe("draft two");
+			expect(second.tools.map((tool) => tool.name)).toEqual(["tool-two"]);
+			expect(third.config.instructions).toBe("draft three");
+			expect(configCalls().map((call) => call.ifNoneMatch)).toEqual([
+				null,
+				null,
+				null,
+			]);
+			expect(configCalls().map((call) => call.configSource)).toEqual([
+				"draft",
+				"draft",
+				"draft",
+			]);
+		});
+
+		test("a 304 answer to a draft read is never resolved from a cached copy", async () => {
+			await publishedNow(ALPHA);
+			reply = () => new Response(null, { status: 304, headers: { etag: '"e1"' } });
+
+			await expect(publishedNow(DRAFT)).rejects.toThrow();
+		});
+
+		test("a warm live copy is never served to a draft reader", async () => {
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+			await publishedNow(ALPHA);
+
+			const draft = await publishedNow(DRAFT);
+
+			expect(draft.config.instructions).toBe("draft prompt");
+			const draftCall = configCalls().at(-1);
+			expect(draftCall?.configSource).toBe("draft");
+			expect(draftCall?.ifNoneMatch).toBeNull();
+		});
+
+		test("a draft read leaves the warm live copy as it was", async () => {
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+			await publishedNow(ALPHA);
+			await publishedNow(DRAFT);
+
+			expect((await publishedNow(ALPHA)).config.instructions).toBe("live prompt");
+			expect(cacheState(ALPHA)).toBe("warm");
+			expect(configCalls()).toHaveLength(2);
+		});
+
+		test("a draft read never warms the live cache", async () => {
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+			await publishedNow(DRAFT);
+
+			expect(cacheState(ALPHA)).toBe("cold");
+			expect((await publishedNow(ALPHA)).config.instructions).toBe("live prompt");
+			const liveCall = configCalls().at(-1);
+			expect(configCalls()).toHaveLength(2);
+			expect(liveCall?.configSource).toBeNull();
+			expect(liveCall?.ifNoneMatch).toBeNull();
+		});
+
+		test("the live revalidation after a draft read never sends the draft's tag", async () => {
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+			await publishedNow(ALPHA);
+			await publishedNow(DRAFT);
+
+			setSystemTime(new Date(START + WINDOW_MS + 1));
+			await publishedNow(ALPHA);
+			await settle();
+
+			const liveCalls = configCalls().filter((call) => call.configSource === null);
+			expect(liveCalls.map((call) => call.ifNoneMatch)).toEqual([null, '"l"']);
+		});
+
+		test("live and draft reads started together each get their own answer", async () => {
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+
+			const [live, draft] = await Promise.all([
+				publishedNow(ALPHA),
+				publishedNow(DRAFT),
+			]);
+
+			expect(live.config.instructions).toBe("live prompt");
+			expect(draft.config.instructions).toBe("draft prompt");
+			expect(configCalls()).toHaveLength(2);
+		});
+
+		test("a draft read started first never becomes the live readers' pass", async () => {
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+
+			const [draft, live] = await Promise.all([
+				publishedNow(DRAFT),
+				publishedNow(ALPHA),
+			]);
+
+			expect(draft.config.instructions).toBe("draft prompt");
+			expect(live.config.instructions).toBe("live prompt");
+		});
+
+		test("a draft read past the window triggers no live revalidation", async () => {
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+			await publishedNow(ALPHA);
+
+			setSystemTime(new Date(START + WINDOW_MS + 1));
+			await publishedNow(DRAFT);
+			await settle();
+
+			expect(configCalls().map((call) => call.configSource)).toEqual([
+				null,
+				"draft",
+			]);
+			expect(cacheState(ALPHA)).toBe("stale");
+		});
+
+		test("cacheState reports cold for a draft tenant, whatever the live copy holds", async () => {
+			expect(cacheState(DRAFT)).toBe("cold");
+
+			await publishedNow(ALPHA);
+			expect(cacheState(DRAFT)).toBe("cold");
+
+			await publishedNow(DRAFT);
+			expect(cacheState(DRAFT)).toBe("cold");
+		});
+
+		test("revalidating a draft tenant fetches nothing when the live copy is cold", async () => {
+			revalidatePublished(DRAFT);
+			await settle();
+
+			expect(configCalls()).toHaveLength(0);
+			expect(cacheState(ALPHA)).toBe("cold");
+		});
+
+		test("revalidating a draft tenant leaves a stale live copy stale", async () => {
+			await publishedNow(ALPHA);
+			setSystemTime(new Date(START + WINDOW_MS + 1));
+
+			revalidatePublished(DRAFT);
+			await settle();
+
+			expect(configCalls()).toHaveLength(1);
+			expect(cacheState(ALPHA)).toBe("stale");
+		});
+
+		test("a failed draft read keeps the warm live copy", async () => {
+			reply = (request) =>
+				request.configSource === "draft"
+					? new Response("boom", { status: 500 })
+					: ok("live prompt", '"l"');
+			await publishedNow(ALPHA);
+
+			await expect(publishedNow(DRAFT)).rejects.toThrow(/500/);
+
+			expect((await publishedNow(ALPHA)).config.instructions).toBe("live prompt");
+			expect(cacheState(ALPHA)).toBe("warm");
+		});
+
+		test("a draft 404 never drops the warm live copy", async () => {
+			reply = (request) =>
+				request.configSource === "draft"
+					? gone("NO_DRAFT_CONFIG")
+					: ok("live prompt", '"l"');
+			await publishedNow(ALPHA);
+
+			await expect(publishedNow(DRAFT)).rejects.toThrow(/NO_DRAFT_CONFIG/);
+
+			expect((await publishedNow(ALPHA)).config.instructions).toBe("live prompt");
+		});
+
+		test("a failed draft read leaves no failure for a cold live reader inside the window", async () => {
+			reply = (request) =>
+				request.configSource === "draft"
+					? new Response("boom", { status: 500 })
+					: ok("live prompt", '"l"');
+
+			await expect(publishedNow(DRAFT)).rejects.toThrow(/500/);
+
+			expect((await publishedNow(ALPHA)).config.instructions).toBe("live prompt");
+		});
+
+		test("a failed draft tool listing keeps the warm live copy", async () => {
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+			await publishedNow(ALPHA);
+			listTools = async () => {
+				throw new Error("mcp down");
+			};
+
+			await expect(publishedNow(DRAFT)).rejects.toThrow(/mcp down/);
+
+			expect((await publishedNow(ALPHA)).config.instructions).toBe("live prompt");
+			expect(cacheState(ALPHA)).toBe("warm");
+		});
+
+		test("a failed draft read is retried on the very next draft read", async () => {
+			reply = () => new Response("boom", { status: 500 });
+			await expect(publishedNow(DRAFT)).rejects.toThrow(/500/);
+
+			reply = () => ok("draft recovered", '"d2"');
+			expect((await publishedNow(DRAFT)).config.instructions).toBe("draft recovered");
+		});
+
+		test("a failed live read never blocks a draft read inside the window", async () => {
+			reply = (request) =>
+				request.configSource === "draft"
+					? ok("draft prompt", '"d"')
+					: new Response("boom", { status: 500 });
+			await expect(publishedNow(ALPHA)).rejects.toThrow(/500/);
+
+			expect((await publishedNow(DRAFT)).config.instructions).toBe("draft prompt");
+		});
+
+		test("a session started as a draft reads the draft end to end", async () => {
+			delete process.env.WANIWANI_API_KEY;
+			process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
+			reply = byConfigSource({ live: "live prompt", draft: "draft prompt" });
+			const initiator = {
+				attributes: { environmentId: "alpha", configSource: "draft" },
+				authenticator: "jwt-ecdsa",
+				principalId: "waniwani:agent:visitor",
+				principalType: "service",
+				subject: "visitor",
+			};
+
+			const tenant = tenantOf({ current: initiator, initiator });
+
+			expect((await publishedNow(tenant)).config.instructions).toBe("draft prompt");
+			expect(cacheState(tenant)).toBe("cold");
+			expect(cacheState(ALPHA)).toBe("cold");
+		});
+	});
 });
 
 describe("credentialForm and tenantOf", () => {
@@ -475,6 +763,155 @@ describe("credentialForm and tenantOf", () => {
 	test("no claimed environment on the hosted form fails the turn", () => {
 		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
 		expect(() => tenantOf(auth({}))).toThrow(/WANIWANI_APP_PUBLIC_KEY/);
+	});
+});
+
+describe("the draft config source on the tenant", () => {
+	type Attributes = Record<string, string | readonly string[]>;
+
+	function credential(attributes: Attributes) {
+		return {
+			attributes,
+			authenticator: "jwt-ecdsa",
+			principalId: "waniwani:agent:visitor",
+			principalType: "service",
+			subject: "visitor",
+		};
+	}
+
+	function headersFor(input: { initiator: Attributes; current?: Attributes }) {
+		const initiator = credential(input.initiator);
+		const current = input.current ? credential(input.current) : null;
+		return configRequest(tenantOf({ current, initiator })).headers;
+	}
+
+	beforeEach(() => {
+		delete process.env.WANIWANI_API_KEY;
+		delete process.env.WANIWANI_CHANNEL_ID;
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
+		process.env.WANIWANI_SERVICE_PRIVATE_KEY = SERVICE_KEY;
+		process.env.WANIWANI_REGION = "eu";
+		process.env.WANIWANI_API_URL = API_URL;
+	});
+
+	afterEach(() => {
+		delete process.env.WANIWANI_APP_PUBLIC_KEY;
+		delete process.env.WANIWANI_SERVICE_PRIVATE_KEY;
+		delete process.env.WANIWANI_API_KEY;
+	});
+
+	test("an initiator claiming the draft source makes a draft tenant", () => {
+		const tenant = tenantOf({
+			current: null,
+			initiator: credential({ environmentId: "env-1", configSource: "draft" }),
+		});
+
+		expect(tenant.draft).toBe(true);
+		expect(tenant.environmentId).toBe("env-1");
+		expect(configRequest(tenant).headers["x-waniwani-config-source"]).toBe("draft");
+	});
+
+	test("a draft config request carries authorization, grant and source together", () => {
+		const headers = headersFor({
+			initiator: {
+				environmentId: "env-1",
+				configSource: "draft",
+				grant: "app.signed.token",
+			},
+		});
+
+		expect(Object.keys(headers).sort()).toEqual([
+			"authorization",
+			"x-waniwani-config-source",
+			"x-waniwani-grant",
+		]);
+		expect(headers.authorization?.startsWith("Bearer eyJ")).toBe(true);
+		expect(headers["x-waniwani-grant"]).toBe("app.signed.token");
+		expect(headers["x-waniwani-config-source"]).toBe("draft");
+	});
+
+	test("a draft config request still names its environment on the config route", () => {
+		const { url } = configRequest(
+			tenantOf({
+				current: null,
+				initiator: credential({ environmentId: "env-1", configSource: "draft" }),
+			}),
+		);
+
+		expect(url).toBe(`${API_URL}${CONFIG_PATH}?environmentId=env-1`);
+	});
+
+	test("a live config request carries only authorization and grant", () => {
+		const headers = headersFor({
+			initiator: { environmentId: "env-1", grant: "app.signed.token" },
+		});
+
+		expect(Object.keys(headers).sort()).toEqual(["authorization", "x-waniwani-grant"]);
+	});
+
+	test("a later token claiming draft never turns a live session into a draft", () => {
+		const tenant = tenantOf({
+			current: credential({ environmentId: "env-1", configSource: "draft" }),
+			initiator: credential({ environmentId: "env-1" }),
+		});
+
+		expect(tenant.draft).toBeUndefined();
+		expect(configRequest(tenant).headers["x-waniwani-config-source"]).toBeUndefined();
+	});
+
+	test("a later token claiming live keeps a draft session a draft", () => {
+		const headers = headersFor({
+			initiator: { environmentId: "env-1", configSource: "draft" },
+			current: { environmentId: "env-1", configSource: "live" },
+		});
+
+		expect(headers["x-waniwani-config-source"]).toBe("draft");
+	});
+
+	test("a later token naming no source keeps a draft session a draft", () => {
+		const headers = headersFor({
+			initiator: { environmentId: "env-1", configSource: "draft" },
+			current: { environmentId: "env-1", grant: "browser.token" },
+		});
+
+		expect(headers["x-waniwani-config-source"]).toBe("draft");
+		expect(headers["x-waniwani-grant"]).toBe("browser.token");
+	});
+
+	const liveValues: Array<[string, string | readonly string[]]> = [
+		["live", "live"],
+		["empty", ""],
+		["capitalized", "Draft"],
+		["padded", " draft"],
+		["shouted", "DRAFT"],
+		["a list holding draft", ["draft"]],
+	];
+	for (const [label, value] of liveValues) {
+		test(`a ${label} config source is a live tenant`, () => {
+			const tenant = tenantOf({
+				current: null,
+				initiator: credential({ environmentId: "env-1", configSource: value }),
+			});
+
+			expect(tenant.draft).toBeUndefined();
+			expect(configRequest(tenant).headers["x-waniwani-config-source"]).toBeUndefined();
+		});
+	}
+
+	test("the self-hosted form ignores a draft claim", () => {
+		delete process.env.WANIWANI_APP_PUBLIC_KEY;
+		process.env.WANIWANI_API_KEY = "wwk_unit";
+
+		const tenant = tenantOf({
+			current: null,
+			initiator: credential({ configSource: "draft" }),
+		});
+
+		expect(tenant).toEqual({ key: "self" });
+		expect(configRequest(tenant)).toEqual({
+			url: `${API_URL}${CONFIG_PATH}`,
+			headers: { authorization: "Bearer wwk_unit" },
+		});
 	});
 });
 

@@ -99,8 +99,16 @@ function shared(tenant: Tenant): Promise<Published> {
 	return pass;
 }
 
+/** Every draft turn reads the config as it is now, and never through the shared entry live visitors read. */
+async function draftNow(tenant: Tenant): Promise<Published> {
+	const { value: config } = await fetchSessionConfig({ tenant });
+	const tools = await listMcpTools({ tenantKey: tenant.key, mcpUrl: config.mcpUrl });
+	return { config, tools };
+}
+
 /** What a turn resolves against: memory when warm, a blocking pass when cold or too stale. */
 export async function publishedNow(tenant: Tenant): Promise<Published> {
+	if (tenant.draft) return await draftNow(tenant);
 	const entry = entries.get(tenant.key);
 	const published = servable(entry);
 	if (published) {
@@ -116,12 +124,14 @@ export async function publishedNow(tenant: Tenant): Promise<Published> {
 }
 
 export function cacheState(tenant: Tenant): "warm" | "stale" | "cold" {
+	if (tenant.draft) return "cold";
 	const entry = entries.get(tenant.key);
 	if (!servable(entry)) return "cold";
 	return fresh(entry) ? "warm" : "stale";
 }
 
 export function revalidatePublished(tenant: Tenant): void {
+	if (tenant.draft) return;
 	if (fresh(entries.get(tenant.key)) || inflight.has(tenant.key)) {
 		return;
 	}
