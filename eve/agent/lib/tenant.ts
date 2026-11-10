@@ -7,7 +7,10 @@ export const ANONYMOUS = "anonymous";
 const SERVICE_ISSUER = "waniwani:agent-runtime";
 const SERVICE_TOKEN_LIFETIME_SECONDS = 60;
 
-export type Tenant = { key: string; environmentId?: string; grant?: string };
+/** `draft` tenants read the agent's unpublished config, which no cache may hold. */
+export type Tenant = { key: string; environmentId?: string; grant?: string; draft?: true };
+
+const CONFIG_SOURCE_HEADER = "x-waniwani-config-source";
 
 export type ChannelSource = { id: string; label: string | null; type?: string | null };
 
@@ -59,6 +62,7 @@ export function tenantOf(auth: SessionAuth | undefined): Tenant {
 		key: environmentId,
 		environmentId,
 		...(typeof grant === "string" && grant ? { grant } : {}),
+		...(attribute(auth, "configSource") === "draft" ? { draft: true } : {}),
 	};
 }
 
@@ -183,6 +187,10 @@ export function configRequest(tenant: Tenant): {
 	});
 	return {
 		url,
-		headers: { authorization, ...(tenant.grant ? { "x-waniwani-grant": tenant.grant } : {}) },
+		headers: {
+			authorization,
+			...(tenant.grant ? { "x-waniwani-grant": tenant.grant } : {}),
+			...(tenant.draft ? { [CONFIG_SOURCE_HEADER]: "draft" } : {}),
+		},
 	};
 }
