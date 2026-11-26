@@ -35,15 +35,20 @@ let calls: Recorded[] = [];
 let reply: Replier;
 let listTools: () => Promise<Array<{ name: string; inputSchema: object }>>;
 
+let toolListings: Array<{ tenantKey: string; mcpUrl: string }> = [];
+
 mock.module("./mcp-catalog.js", () => ({
-	listMcpTools: () => listTools(),
+	listMcpTools: (input: { tenantKey: string; mcpUrl: string }) => {
+		toolListings.push(input);
+		return listTools();
+	},
 	callMcpTool: () => {
 		throw new Error("not used here");
 	},
 	textOf: () => "",
 }));
 
-const { publishedNow, revalidatePublished, resetPublished } = await import(
+const { cacheState, publishedNow, revalidatePublished, resetPublished } = await import(
 	"./published.js"
 );
 const { tenantOf, assertCallerOwnsSession, credentialForm, resolveChannel } =
@@ -616,5 +621,333 @@ describe("assertCallerOwnsSession", () => {
 				initiator: principal({ subject: "anonymous", environmentId: "env-1" }),
 			}),
 		).toThrow(/different visitor/);
+	});
+});
+
+describe("published draft and tunnel variants", () => {
+	const ENV = "env-variants";
+	const TUNNEL_A = "https://dev-a.waniwani.dev/mcp";
+	const TUNNEL_B = "https://dev-b.waniwani.dev/mcp";
+	let originalFetch: typeof fetch;
+
+	function hostedTenant(attributes: Record<string, string>) {
+		return tenantOf({
+			current: null,
+			initiator: {
+				attributes: { environmentId: ENV, ...attributes },
+				authenticator: "jwt-ecdsa",
+				principalId: "waniwani:agent:visitor",
+				principalType: "service",
+				subject: "visitor",
+			},
+		});
+	}
+
+	const live = () => hostedTenant({ grant: "live.jwt" });
+	const draft = () => hostedTenant({ grant: "draft.jwt", config: "draft" });
+	const tunnelA = () => hostedTenant({ grant: "tunnel-a.jwt", mcpUrl: TUNNEL_A });
+	const tunnelB = () => hostedTenant({ grant: "tunnel-b.jwt", mcpUrl: TUNNEL_B });
+
+	/** The app tells the variants apart by the grant, the token it was handed. */
+	function byGrant(replies: Record<string, () => Response>): Replier {
+		return (request) => {
+			const pick = request.grant ? replies[request.grant] : undefined;
+			if (!pick) throw new Error(`no reply for grant ${request.grant}`);
+			return pick();
+		};
+	}
+
+	beforeEach(() => {
+		setSystemTime(new Date(START));
+		resetPublished();
+		calls = [];
+		toolListings = [];
+		reply = byGrant({
+			"live.jwt": () => ok("live", '"live-1"'),
+			"draft.jwt": () => ok("draft", '"draft-1"'),
+			"tunnel-a.jwt": () => ok("tunnel-a", '"ta-1"'),
+			"tunnel-b.jwt": () => ok("tunnel-b", '"tb-1"'),
+		});
+		listTools = async () => [
+			{ name: "echo", inputSchema: { type: "object" as const } },
+		];
+		originalFetch = globalThis.fetch;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : String(input);
+			const headers = new Headers(init?.headers);
+			const recorded: Recorded = {
+				url,
+				ifNoneMatch: headers.get("if-none-match"),
+				authorization: headers.get("authorization"),
+				grant: headers.get("x-waniwani-grant"),
+			};
+			calls.push(recorded);
+			if (!url.includes(CONFIG_PATH)) {
+				throw new Error(`unexpected fetch: ${url}`);
+			}
+			return reply(recorded);
+		}) as typeof fetch;
+
+		process.env.WANIWANI_API_URL = API_URL;
+		delete process.env.WANIWANI_API_KEY;
+		process.env.WANIWANI_APP_PUBLIC_KEY = "app-public-key";
+		process.env.WANIWANI_SERVICE_PRIVATE_KEY = SERVICE_KEY;
+		process.env.WANIWANI_REGION = "eu";
+		delete process.env.WANIWANI_CHANNEL_ID;
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		setSystemTime();
+		delete process.env.WANIWANI_SERVICE_PRIVATE_KEY;
+		delete process.env.WANIWANI_APP_PUBLIC_KEY;
+	});
+
+	test("a draft turn fetches from the app every time, even inside the window", async () => {
+		expect((await publishedNow(draft())).config.instructions).toBe("draft");
+
+		reply = byGrant({ "draft.jwt": () => ok("draft edited", '"draft-2"') });
+		expect((await publishedNow(draft())).config.instructions).toBe("draft edited");
+
+		reply = byGrant({ "draft.jwt": () => ok("draft edited twice", '"draft-3"') });
+		expect((await publishedNow(draft())).config.instructions).toBe(
+			"draft edited twice",
+		);
+		expect(configCalls()).toHaveLength(3);
+	});
+
+	test("a tunnel turn fetches from the app every time, even inside the window", async () => {
+		await publishedNow(tunnelA());
+		await publishedNow(tunnelA());
+		await publishedNow(tunnelA());
+
+		expect(configCalls()).toHaveLength(3);
+	});
+
+	test("a draft turn never falls back to its earlier copy when the app fails", async () => {
+		await publishedNow(draft());
+
+		reply = () => new Response("boom", { status: 500 });
+		await expect(publishedNow(draft())).rejects.toThrow(/500/);
+
+		reply = () => gone("NO_DRAFT");
+		await expect(publishedNow(draft())).rejects.toThrow(/NO_DRAFT/);
+	});
+
+	test("a draft turn never falls back to its earlier copy when its tools fail", async () => {
+		await publishedNow(draft());
+
+		listTools = async () => {
+			throw new Error("tunnel down");
+		};
+		await expect(publishedNow(draft())).rejects.toThrow(/tunnel down/);
+	});
+
+	test("a failed draft turn is retried on the very next turn", async () => {
+		reply = () => new Response("boom", { status: 500 });
+		await expect(publishedNow(draft())).rejects.toThrow(/500/);
+
+		reply = byGrant({ "draft.jwt": () => ok("draft back", '"draft-9"') });
+		expect((await publishedNow(draft())).config.instructions).toBe("draft back");
+		expect(configCalls()).toHaveLength(2);
+	});
+
+	test("concurrent draft turns share one fetch", async () => {
+		const [one, two] = await Promise.all([
+			publishedNow(draft()),
+			publishedNow(draft()),
+		]);
+
+		expect(one.config.instructions).toBe("draft");
+		expect(two.config.instructions).toBe("draft");
+		expect(configCalls()).toHaveLength(1);
+	});
+
+	test("a warm live copy is never served to a draft turn", async () => {
+		expect((await publishedNow(live())).config.instructions).toBe("live");
+		expect((await publishedNow(draft())).config.instructions).toBe("draft");
+		expect((await publishedNow(tunnelA())).config.instructions).toBe("tunnel-a");
+		expect(configCalls().map((call) => call.grant)).toEqual([
+			"live.jwt",
+			"draft.jwt",
+			"tunnel-a.jwt",
+		]);
+	});
+
+	test("a draft or tunnel pass never replaces the warm live copy", async () => {
+		await publishedNow(live());
+		await publishedNow(draft());
+		await publishedNow(tunnelA());
+
+		expect((await publishedNow(live())).config.instructions).toBe("live");
+		expect(configCalls()).toHaveLength(3);
+	});
+
+	test("a draft copy is never served to a cold live turn", async () => {
+		await publishedNow(draft());
+		await publishedNow(tunnelA());
+
+		expect((await publishedNow(live())).config.instructions).toBe("live");
+		expect(configCalls().at(-1)?.grant).toBe("live.jwt");
+	});
+
+	test("a draft fetched while live revalidates leaves live on its own copy", async () => {
+		await publishedNow(live());
+		setSystemTime(new Date(START + WINDOW_MS + 1));
+
+		reply = byGrant({
+			"live.jwt": () => ok("live v2", '"live-2"'),
+			"draft.jwt": () => ok("draft v2", '"draft-2"'),
+		});
+		expect((await publishedNow(draft())).config.instructions).toBe("draft v2");
+		expect((await publishedNow(live())).config.instructions).toBe("live");
+		await settle();
+		expect((await publishedNow(live())).config.instructions).toBe("live v2");
+		expect((await publishedNow(draft())).config.instructions).toBe("draft v2");
+	});
+
+	test("a withdrawn draft never drops the live copy", async () => {
+		await publishedNow(live());
+
+		reply = byGrant({ "draft.jwt": () => gone("NO_DRAFT") });
+		await expect(publishedNow(draft())).rejects.toThrow(/NO_DRAFT/);
+
+		expect((await publishedNow(live())).config.instructions).toBe("live");
+		expect(configCalls()).toHaveLength(2);
+	});
+
+	test("a tunnel outage never fails a live turn", async () => {
+		await publishedNow(live());
+
+		listTools = async () => {
+			throw new Error("tunnel down");
+		};
+		await expect(publishedNow(tunnelA())).rejects.toThrow(/tunnel down/);
+
+		expect((await publishedNow(live())).config.instructions).toBe("live");
+	});
+
+	test("a withdrawn live agent does not block a draft turn", async () => {
+		reply = byGrant({
+			"live.jwt": () => gone("NO_LIVE_CONFIG"),
+			"draft.jwt": () => ok("draft", '"draft-1"'),
+		});
+		await expect(publishedNow(live())).rejects.toThrow(/NO_LIVE_CONFIG/);
+
+		expect((await publishedNow(draft())).config.instructions).toBe("draft");
+	});
+
+	test("concurrent live and draft cold turns each get their own fetch", async () => {
+		const [liveOne, draftOne] = await Promise.all([
+			publishedNow(live()),
+			publishedNow(draft()),
+		]);
+
+		expect(liveOne.config.instructions).toBe("live");
+		expect(draftOne.config.instructions).toBe("draft");
+		expect(configCalls()).toHaveLength(2);
+	});
+
+	test("concurrent turns for two tunnels never share a fetch", async () => {
+		const [one, two] = await Promise.all([
+			publishedNow(tunnelA()),
+			publishedNow(tunnelB()),
+		]);
+
+		expect(one.config.instructions).toBe("tunnel-a");
+		expect(two.config.instructions).toBe("tunnel-b");
+		expect(configCalls()).toHaveLength(2);
+	});
+
+	test("a draft turn during a live revalidation does not ride on the live pass", async () => {
+		await publishedNow(live());
+		setSystemTime(new Date(START + WINDOW_MS + 1));
+
+		let releaseLive: (response: Response) => void = () => {};
+		const liveHeld = new Promise<Response>((resolve) => {
+			releaseLive = resolve;
+		});
+		let liveHeldOnce = false;
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			const grant = headers.get("x-waniwani-grant");
+			calls.push({
+				url: String(input),
+				ifNoneMatch: headers.get("if-none-match"),
+				authorization: headers.get("authorization"),
+				grant,
+			});
+			if (grant === "live.jwt" && !liveHeldOnce) {
+				liveHeldOnce = true;
+				return liveHeld;
+			}
+			return grant === "draft.jwt" ? ok("draft", '"draft-1"') : ok("live v2", '"l2"');
+		}) as typeof fetch;
+
+		expect((await publishedNow(live())).config.instructions).toBe("live");
+		expect((await publishedNow(draft())).config.instructions).toBe("draft");
+		releaseLive(ok("live v2", '"live-2"'));
+		await settle();
+	});
+
+	test("each variant lists its tools under its own key, apart from live", async () => {
+		await publishedNow(live());
+		await publishedNow(draft());
+		await publishedNow(tunnelA());
+
+		const keys = toolListings.map((listing) => listing.tenantKey);
+		expect(keys).toEqual([live().key, draft().key, tunnelA().key]);
+		expect(new Set(keys).size).toBe(3);
+	});
+
+	test("a draft or tunnel turn hands the app its own token as the grant", async () => {
+		await publishedNow(draft());
+		await publishedNow(tunnelA());
+
+		expect(configCalls().map((call) => call.grant)).toEqual([
+			"draft.jwt",
+			"tunnel-a.jwt",
+		]);
+		expect(configCalls().every((call) => call.url.includes(`environmentId=${ENV}`))).toBe(
+			true,
+		);
+	});
+
+	test("a live tenant from a token keeps the warm, stale and cold behavior", async () => {
+		const tenant = live();
+		expect(tenant.key).toBe(ENV);
+
+		await publishedNow(tenant);
+		reply = byGrant({ "live.jwt": () => ok("live v2", '"live-2"') });
+		expect((await publishedNow(tenant)).config.instructions).toBe("live");
+		expect(configCalls()).toHaveLength(1);
+
+		setSystemTime(new Date(START + WINDOW_MS + 1));
+		expect((await publishedNow(tenant)).config.instructions).toBe("live");
+		await settle();
+		expect((await publishedNow(tenant)).config.instructions).toBe("live v2");
+		expect(configCalls()).toHaveLength(2);
+	});
+
+	test("a variant reads as cold even after a pass, and its pass never warms live", async () => {
+		expect(cacheState(draft())).toBe("cold");
+		await publishedNow(draft());
+		await publishedNow(tunnelA());
+
+		expect(cacheState(draft())).toBe("cold");
+		expect(cacheState(tunnelA())).toBe("cold");
+		expect(cacheState(live())).toBe("cold");
+
+		await publishedNow(live());
+		expect(cacheState(live())).toBe("warm");
+		expect(cacheState(draft())).toBe("cold");
+	});
+
+	test("a live tenant still answers from memory after a draft fetch of its environment", async () => {
+		await publishedNow(live());
+		await publishedNow(draft());
+		reply = () => new Response("boom", { status: 500 });
+
+		expect((await publishedNow(live())).config.instructions).toBe("live");
 	});
 });
