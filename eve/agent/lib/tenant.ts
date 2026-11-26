@@ -1,4 +1,4 @@
-import { createPrivateKey, sign } from "node:crypto";
+import { createHash, createPrivateKey, sign } from "node:crypto";
 import type { SessionAuth } from "eve/context";
 
 export const SELF_TENANT = "self";
@@ -68,8 +68,13 @@ export function tenantOf(auth: SessionAuth | undefined): Tenant {
 	const grant = claim("grant");
 	const draft = claim("config") === "draft";
 	const mcpUrl = claim("mcpUrl");
+	// Hashed so the tunnel URL never reaches the timing logs that print the key.
 	const variant =
-		draft || mcpUrl ? JSON.stringify(["variant", environmentId, draft, mcpUrl ?? null]) : undefined;
+		draft || mcpUrl
+			? `variant:${createHash("sha256")
+					.update(JSON.stringify([environmentId, draft, mcpUrl ?? null]))
+					.digest("hex")}`
+			: undefined;
 	return {
 		key: variant ?? environmentId,
 		environmentId,
