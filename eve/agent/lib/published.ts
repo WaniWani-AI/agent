@@ -99,8 +99,9 @@ function shared(tenant: Tenant): Promise<Published> {
 	return pass;
 }
 
-/** What a turn resolves against: memory when warm, a blocking pass when cold or too stale. */
+/** What a turn resolves against: memory when warm, a blocking pass when cold, too stale, or a draft or tunnel variant. */
 export async function publishedNow(tenant: Tenant): Promise<Published> {
+	if (tenant.variant) return await shared(tenant);
 	const entry = entries.get(tenant.key);
 	const published = servable(entry);
 	if (published) {
@@ -116,6 +117,7 @@ export async function publishedNow(tenant: Tenant): Promise<Published> {
 }
 
 export function cacheState(tenant: Tenant): "warm" | "stale" | "cold" {
+	if (tenant.variant) return "cold";
 	const entry = entries.get(tenant.key);
 	if (!servable(entry)) return "cold";
 	return fresh(entry) ? "warm" : "stale";

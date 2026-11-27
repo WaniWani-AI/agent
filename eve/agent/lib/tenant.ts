@@ -1,4 +1,4 @@
-import { createPrivateKey, sign } from "node:crypto";
+import { createHash, createPrivateKey, sign } from "node:crypto";
 import type { SessionAuth } from "eve/context";
 
 export const SELF_TENANT = "self";
@@ -7,7 +7,11 @@ export const ANONYMOUS = "anonymous";
 const SERVICE_ISSUER = "waniwani:agent-runtime";
 const SERVICE_TOKEN_LIFETIME_SECONDS = 60;
 
-export type Tenant = { key: string; environmentId?: string; grant?: string };
+/**
+ * `variant` names a config other than the environment's live one: its draft, or
+ * its tools behind a developer's tunnel. Only the app can mint either claim.
+ */
+export type Tenant = { key: string; environmentId?: string; grant?: string; variant?: string };
 
 export type ChannelSource = { id: string; label: string | null; type?: string | null };
 
@@ -54,11 +58,28 @@ export function tenantOf(auth: SessionAuth | undefined): Tenant {
 			"Session credential names no environment, and WANIWANI_APP_PUBLIC_KEY requires one",
 		);
 	}
-	const grant = auth?.current?.attributes.grant ?? auth?.initiator?.attributes.grant;
+	// The app reads the draft and tunnel claims from the grant alone, so the key
+	// has to come from that same token, never from claims spread across two.
+	const holder = auth?.current ?? auth?.initiator;
+	const claim = (name: string): string | undefined => {
+		const value = holder?.attributes[name];
+		return typeof value === "string" && value ? value : undefined;
+	};
+	const grant = claim("grant");
+	const draft = claim("config") === "draft";
+	const mcpUrl = claim("mcpUrl");
+	// Hashed so the tunnel URL never reaches the timing logs that print the key.
+	const variant =
+		draft || mcpUrl
+			? `variant:${createHash("sha256")
+					.update(JSON.stringify([environmentId, draft, mcpUrl ?? null]))
+					.digest("hex")}`
+			: undefined;
 	return {
-		key: environmentId,
+		key: variant ?? environmentId,
 		environmentId,
-		...(typeof grant === "string" && grant ? { grant } : {}),
+		...(grant ? { grant } : {}),
+		...(variant ? { variant } : {}),
 	};
 }
 
