@@ -35,7 +35,7 @@ are peers, which an MCP server built on Skybridge already has.
 calls in process.
 
 ```ts
-mintSessionToken({ signingKey, sub, environmentId?, channelId?, sid?, config?, mcpUrl? }): Promise<string>
+mintSessionToken({ signingKey, sub, environmentId?, channelId?, sid? }): Promise<string>
 runTurn({ eveUrl, credential, visitorId?, message, sessionId?, cursor?, clientContext?, extra?, context?, signal? })
 cancelTurn({ eveUrl, credential, sessionId }): Promise<void>
 runtimeHealth({ eveUrl, credential }): Promise<unknown>

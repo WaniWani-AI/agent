@@ -46,20 +46,11 @@ export async function mintSessionToken(input: {
 	 * on every request that names one.
 	 */
 	sid?: string;
-	/**
-	 * Serve the environment's unpublished draft instead of its live config. The
-	 * app only mints it for a dashboard user testing the draft.
-	 */
-	config?: "draft";
-	/** Reach this MCP server instead of the environment's own, for a developer's local tunnel. */
-	mcpUrl?: string;
 }): Promise<string> {
 	const claims: Record<string, string> = {
 		...(input.environmentId ? { environmentId: input.environmentId } : {}),
 		...(input.channelId ? { channelId: input.channelId } : {}),
 		...(input.sid ? { sid: input.sid } : {}),
-		...(input.config ? { config: input.config } : {}),
-		...(input.mcpUrl ? { mcpUrl: input.mcpUrl } : {}),
 	};
 	return await new SignJWT(claims)
 		.setProtectedHeader({ alg: "ES256" })
